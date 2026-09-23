@@ -515,6 +515,76 @@ namespace EndcordInstaller
             "renderer.css", "renderer.css.map"
         };
 
+        public static string ReadInstalledVersion()
+        {
+            return ReadVersionFile(Path.Combine(GetDistPath(), "version.json"));
+        }
+
+        public static string FetchLatestVersion()
+        {
+            try
+            {
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(20);
+                    http.DefaultRequestHeaders.UserAgent.ParseAdd("EndcordInstaller");
+                    string meta = HttpGet(http, "https://api.github.com/repos/" + GitHubRepo + "/commits/main");
+                    var shaMatch = Regex.Match(meta ?? "", "\"sha\"\\s*:\\s*\"([0-9a-f]{40})\"");
+                    if (!shaMatch.Success) return null;
+                    string json = HttpGet(http, "https://raw.githubusercontent.com/" + GitHubRepo + "/" + shaMatch.Groups[1].Value + "/publish/dist/version.json");
+                    return ReadVersionText(json);
+                }
+            }
+            catch { return null; }
+        }
+
+        public static void CheckForUpdate(Action<string> log)
+        {
+            string local = ReadInstalledVersion();
+            string remote = FetchLatestVersion();
+            if (string.IsNullOrEmpty(remote))
+            {
+                if (log != null) log("無法檢查更新。請確認可以連上 GitHub。");
+                return;
+            }
+            if (local == remote)
+            {
+                if (log != null) log("已是最新版本（" + remote + "）。");
+                return;
+            }
+            if (log != null)
+            {
+                log(string.IsNullOrEmpty(local)
+                    ? "GitHub 最新版是 " + remote + "，正在下載..."
+                    : "發現新版本 " + remote + "（目前是 " + local + "），正在下載...");
+            }
+            if (TryUpdateDistFromGitHub(GetDistPath(), null))
+            {
+                if (log != null) log("已更新到 " + remote + "。請重新開啟 Discord。");
+            }
+            else if (log != null)
+            {
+                log("下載失敗。");
+            }
+        }
+
+        static string ReadVersionFile(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return null;
+                return ReadVersionText(File.ReadAllText(path));
+            }
+            catch { return null; }
+        }
+
+        static string ReadVersionText(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            var match = Regex.Match(json, "\"version\"\\s*:\\s*\"([^\"]+)\"");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
         public static bool TryUpdateDistFromGitHub(string destDir, Action<string> log)
         {
             if (string.IsNullOrEmpty(destDir)) return false;

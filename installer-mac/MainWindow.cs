@@ -41,6 +41,7 @@ namespace EndcordInstaller.Mac
         readonly Button _uninstall;
         readonly Button _kill;
         readonly Button _refresh;
+        readonly Button _checkUpdate;
 
         public MainWindow()
         {
@@ -123,11 +124,13 @@ namespace EndcordInstaller.Mac
             _uninstall = ActionButton("移除", "#EF4444", RunUninstall);
             _kill = ActionButton("關閉 Discord", "#F59E0B", RunKill);
             _refresh = ActionButton("重新整理", "#1F2937", RefreshClients);
+            _checkUpdate = ActionButton("檢查更新", "#10B981", RunCheckUpdate);
             actions.Children.Add(_install);
             actions.Children.Add(_repair);
             actions.Children.Add(_uninstall);
             actions.Children.Add(_kill);
             actions.Children.Add(_refresh);
+            actions.Children.Add(_checkUpdate);
             Grid.SetRow(actions, 3);
             root.Children.Add(actions);
 
@@ -390,6 +393,12 @@ namespace EndcordInstaller.Mac
             _uninstall.IsEnabled = !busy;
             _kill.IsEnabled = !busy;
             _refresh.IsEnabled = !busy;
+            _checkUpdate.IsEnabled = !busy;
+        }
+
+        void RunCheckUpdate()
+        {
+            RunBusy("正在檢查更新...", () => MacSupport.CheckForUpdate(Log));
         }
 
         void SetStatus(string text)

@@ -657,6 +657,72 @@ namespace EndcordInstaller
             }
             catch { return false; }
         }
+
+        public static void CheckForUpdate(Action<string> log)
+        {
+            string local = null;
+            try
+            {
+                string path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "Endcord", "dist", "version.json");
+                if (File.Exists(path))
+                {
+                    var match = Regex.Match(File.ReadAllText(path), "\"version\"\\s*:\\s*\"([^\"]+)\"");
+                    if (match.Success) local = match.Groups[1].Value;
+                }
+            }
+            catch { }
+
+            string remote = null;
+            try
+            {
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(20);
+                    http.DefaultRequestHeaders.UserAgent.ParseAdd("EndcordInstaller");
+                    string meta = http.GetStringAsync("https://api.github.com/repos/ddg1174/Endcord-macOS/commits/main")
+                        .ConfigureAwait(false).GetAwaiter().GetResult();
+                    var shaMatch = Regex.Match(meta ?? "", "\"sha\"\\s*:\\s*\"([0-9a-f]{40})\"");
+                    if (shaMatch.Success)
+                    {
+                        string json = http.GetStringAsync("https://raw.githubusercontent.com/ddg1174/Endcord-macOS/" + shaMatch.Groups[1].Value + "/publish/dist/version.json")
+                            .ConfigureAwait(false).GetAwaiter().GetResult();
+                        var version = Regex.Match(json ?? "", "\"version\"\\s*:\\s*\"([^\"]+)\"");
+                        if (version.Success) remote = version.Groups[1].Value;
+                    }
+                }
+            }
+            catch { }
+
+            if (string.IsNullOrEmpty(remote))
+            {
+                if (log != null) log("無法檢查更新。請確認可以連上 GitHub。");
+                return;
+            }
+            if (local == remote)
+            {
+                if (log != null) log("已是最新版本（" + remote + "）。");
+                return;
+            }
+            if (log != null)
+            {
+                log(string.IsNullOrEmpty(local)
+                    ? "GitHub 最新版是 " + remote + "，正在下載..."
+                    : "發現新版本 " + remote + "（目前是 " + local + "），正在下載...");
+            }
+            string dest = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Endcord", "dist");
+            if (TryUpdateDistFromGitHub(dest, null))
+            {
+                if (log != null) log("已更新到 " + remote + "。請重新開啟 Discord。");
+            }
+            else if (log != null)
+            {
+                log("下載失敗。");
+            }
+        }
     }
 
     // ═══════════════════════════════ DISCORD CLIENT MODEL ═══════════════════════════════
@@ -806,7 +872,7 @@ namespace EndcordInstaller
         CustomProgress progress;
         CustomCheckBox chkRestart;
         Label lblStatus;
-        PillButton btnInstall, btnRepair, btnUninstall, btnKill, btnRefresh, btnAddPath;
+        PillButton btnInstall, btnRepair, btnUninstall, btnKill, btnRefresh, btnAddPath, btnCheckUpdate;
 
         static readonly Image LogoImg = GetEmbeddedLogo();
 
@@ -960,18 +1026,21 @@ namespace EndcordInstaller
             btnUninstall = new PillButton("移除", Color.FromArgb(239, 68, 68));
             btnKill = new PillButton("關閉 Discord", Color.FromArgb(245, 158, 11));
             btnRefresh = new PillButton("重新整理", Color.FromArgb(31, 41, 55));
+            btnCheckUpdate = new PillButton("檢查更新", Color.FromArgb(16, 185, 129));
             btnAddPath = new PillButton("自訂路徑", Color.FromArgb(31, 41, 55));
             btnInstall.Click += (s, e) => StartInstall(false);
             btnRepair.Click += (s, e) => StartInstall(true);
             btnUninstall.Click += (s, e) => StartUninstall();
             btnKill.Click += (s, e) => DoKill();
             btnRefresh.Click += (s, e) => RefreshClients();
+            btnCheckUpdate.Click += (s, e) => StartCheckUpdate();
             btnAddPath.Click += BtnAddPath_Click;
             actions.Controls.Add(btnInstall);
             actions.Controls.Add(btnRepair);
             actions.Controls.Add(btnUninstall);
             actions.Controls.Add(btnKill);
             actions.Controls.Add(btnRefresh);
+            actions.Controls.Add(btnCheckUpdate);
             actions.Controls.Add(btnAddPath);
 
             var logCard = new Panel
@@ -1231,6 +1300,34 @@ namespace EndcordInstaller
                     RefreshClients();
                     SetStatus("已關閉 Discord");
                 }));
+            }) { IsBackground = true }.Start();
+        }
+
+        void StartCheckUpdate()
+        {
+            SetBusy(true);
+            progress.Value = 0;
+            progress.Visible = true;
+            SetStatus("正在檢查更新...");
+            new Thread(() =>
+            {
+                try
+                {
+                    MacSupport.CheckForUpdate(message => SafeLog(message, C.AccentLight));
+                }
+                catch (Exception ex)
+                {
+                    SafeLog("檢查更新失敗：" + ex.Message, C.Red);
+                }
+                finally
+                {
+                    Invoke(new Action(() =>
+                    {
+                        progress.Visible = false;
+                        SetBusy(false);
+                        SetStatus("就緒");
+                    }));
+                }
             }) { IsBackground = true }.Start();
         }
 
@@ -1544,6 +1641,7 @@ namespace EndcordInstaller
             btnUninstall.Enabled = !b;
             btnKill.Enabled = !b;
             btnRefresh.Enabled = !b;
+            btnCheckUpdate.Enabled = !b;
             btnAddPath.Enabled = !b;
             chkRestart.Enabled = !b;
         }
