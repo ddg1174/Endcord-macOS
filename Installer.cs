@@ -135,6 +135,26 @@ namespace EndcordInstaller
             if (MacSupport.IsPatched(resources))
                 throw new Exception("still marked patched");
 
+            string winRoot = Path.Combine(root, "win-discord", "app-1.0.0");
+            string winRes = Path.Combine(winRoot, "resources");
+            string coreIndex = Path.Combine(winRoot, "modules", "discord_desktop_core-1", "discord_desktop_core", "index.js");
+            Directory.CreateDirectory(Path.GetDirectoryName(coreIndex));
+            Directory.CreateDirectory(winRes);
+            File.WriteAllText(coreIndex, "require(require('path').join(process.env.APPDATA, 'Endcord', 'dist', 'patcher.js'));\nmodule.exports = require('./core.asar');\n");
+            File.WriteAllText(coreIndex + ".bak", "module.exports = require('./core.asar');\n");
+            File.WriteAllText(Path.Combine(winRes, "app.asar"), original);
+
+            MacSupport.Patch(winRes);
+            string restoredCore = File.ReadAllText(coreIndex);
+            if (restoredCore.Contains("Endcord") || restoredCore.Contains("patcher.js"))
+                throw new Exception("desktop core injection was left in place");
+            if (!restoredCore.Contains("core.asar"))
+                throw new Exception("desktop core lost its original export");
+            if (File.Exists(coreIndex + ".bak"))
+                throw new Exception("desktop core backup was not removed");
+            if (!MacSupport.IsPatched(winRes))
+                throw new Exception("windows asar swap did not apply");
+
             Directory.Delete(root, true);
             Console.WriteLine("macOS patch self-test passed");
         }
@@ -308,25 +328,15 @@ namespace EndcordInstaller
                         continue;
                     }
 
-                    string appDir = Path.Combine(client.ResourcesPath, "app");
-                    string originalAsar = Path.Combine(client.ResourcesPath, "app.asar");
-                    string backupAsar = Path.Combine(client.ResourcesPath, "_app.asar");
-
-                    if (File.Exists(originalAsar) && !File.Exists(backupAsar))
+                    var appDirs = Directory.GetDirectories(client.RootPath, "app-*");
+                    if (appDirs.Length == 0 && Directory.Exists(client.ResourcesPath))
+                        MacSupport.Patch(client.ResourcesPath);
+                    foreach (var appVerDir in appDirs)
                     {
-                        File.Move(originalAsar, backupAsar);
+                        string res = Path.Combine(appVerDir, "resources");
+                        if (Directory.Exists(res))
+                            MacSupport.Patch(res);
                     }
-
-                    Directory.CreateDirectory(appDir);
-
-                    string pkgJson = "{\n  \"name\": \"discord\",\n  \"main\": \"index.js\"\n}";
-                    File.WriteAllText(Path.Combine(appDir, "package.json"), pkgJson);
-
-                    string loaderJs = @"const { join } = require('path');
-const appData = process.env.APPDATA || (process.platform === 'darwin' ? join(process.env.HOME, 'Library/Application Support') : join(process.env.HOME, '.config'));
-const patcherPath = join(appData, 'Endcord', 'dist', 'patcher.js');
-require(patcherPath);";
-                    File.WriteAllText(Path.Combine(appDir, "index.js"), loaderJs);
 
                     Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine("Başarıyla kuruldu/onarıldı: " + client.Name);
@@ -396,22 +406,26 @@ require(patcherPath);";
                         continue;
                     }
 
-                    string appDir = Path.Combine(client.ResourcesPath, "app");
-                    string originalAsar = Path.Combine(client.ResourcesPath, "app.asar");
-                    string backupAsar = Path.Combine(client.ResourcesPath, "_app.asar");
-
-                    if (Directory.Exists(appDir))
+                    var appDirs = Directory.GetDirectories(client.RootPath, "app-*");
+                    if (appDirs.Length == 0 && Directory.Exists(client.ResourcesPath))
                     {
-                        Directory.Delete(appDir, true);
+                        if (MacSupport.IsPatched(client.ResourcesPath))
+                            MacSupport.Unpatch(client.ResourcesPath);
+                        else
+                            MacSupport.RestoreLooseCore(Directory.GetParent(client.ResourcesPath)?.FullName);
                     }
-
-                    if (File.Exists(backupAsar))
+                    foreach (var appVerDir in appDirs)
                     {
-                        if (File.Exists(originalAsar))
+                        string res = Path.Combine(appVerDir, "resources");
+                        if (!Directory.Exists(res))
                         {
-                            File.Delete(originalAsar);
+                            MacSupport.RestoreLooseCore(appVerDir);
+                            continue;
                         }
-                        File.Move(backupAsar, originalAsar);
+                        if (MacSupport.IsPatched(res))
+                            MacSupport.Unpatch(res);
+                        else
+                            MacSupport.RestoreLooseCore(appVerDir);
                     }
 
                     Console.ForegroundColor = ConsoleColor.Green;

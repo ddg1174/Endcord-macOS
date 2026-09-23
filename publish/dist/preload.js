@@ -1,4 +1,4 @@
-// Endcord macos
+// Endcord startfix
 // Standalone: false
 // Platform: universal
 // Updater Disabled: false

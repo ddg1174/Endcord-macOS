@@ -14,4 +14,14 @@
   <ItemGroup>
     <Compile Include="InstallerGUI.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="dist\patcher.js" />
+    <EmbeddedResource Include="dist\patcher.js.map" />
+    <EmbeddedResource Include="dist\preload.js" />
+    <EmbeddedResource Include="dist\preload.js.map" />
+    <EmbeddedResource Include="dist\renderer.js" />
+    <EmbeddedResource Include="dist\renderer.js.map" />
+    <EmbeddedResource Include="dist\renderer.css" />
+    <EmbeddedResource Include="dist\renderer.css.map" />
+  </ItemGroup>
 </Project>

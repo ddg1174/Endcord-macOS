@@ -39,6 +39,43 @@ namespace EndcordInstaller
                 + "require(join(appData,\"Endcord\",\"dist\",\"patcher.js\"));";
         }
 
+        // Windows Discord keeps a loose discord_desktop_core module. Requiring
+        // the patcher from there makes startup recurse or throw, and the splash
+        // stays on "Starting...". Put the original index.js back before the asar swap.
+        public static void RestoreLooseCore(string appVersionDir)
+        {
+            if (string.IsNullOrEmpty(appVersionDir)) return;
+            string modulesDir = Path.Combine(appVersionDir, "modules");
+            if (!Directory.Exists(modulesDir)) return;
+
+            foreach (string dir in Directory.GetDirectories(modulesDir, "discord_desktop_core-*"))
+            {
+                string indexJs = Path.Combine(dir, "discord_desktop_core", "index.js");
+                if (!File.Exists(indexJs)) continue;
+
+                string bak = indexJs + ".bak";
+                if (File.Exists(bak))
+                {
+                    PrepareWritable(indexJs);
+                    File.Copy(bak, indexJs, true);
+                    try { File.Delete(bak); } catch { }
+                    continue;
+                }
+
+                string content = File.ReadAllText(indexJs);
+                if (!content.Contains("Endcord") && !content.Contains("patcher.js")) continue;
+
+                var kept = new List<string>();
+                foreach (string line in content.Replace("\r\n", "\n").Split('\n'))
+                {
+                    if (line.Contains("Endcord") || line.Contains("patcher.js")) continue;
+                    kept.Add(line);
+                }
+                PrepareWritable(indexJs);
+                File.WriteAllText(indexJs, string.Join("\n", kept));
+            }
+        }
+
         public static bool IsPatched(string resourcesDir)
         {
             if (string.IsNullOrEmpty(resourcesDir)) return false;
@@ -56,6 +93,10 @@ namespace EndcordInstaller
 
         public static void Patch(string resourcesDir)
         {
+            var parent = Directory.GetParent(resourcesDir);
+            if (parent != null)
+                RestoreLooseCore(parent.FullName);
+
             if (IsPatched(resourcesDir))
                 Unpatch(resourcesDir);
 
@@ -76,8 +117,21 @@ namespace EndcordInstaller
             }
             else
             {
-                PrepareWritable(appAsar);
-                File.Delete(appAsar);
+                long currentLen = new FileInfo(appAsar).Length;
+                long backupLen = new FileInfo(backup).Length;
+                bool currentLooksOriginal = currentLen > 1024 * 1024 && !FileContains(appAsar, "Endcord", 262144);
+                if (currentLooksOriginal && backupLen < currentLen)
+                {
+                    PrepareWritable(backup);
+                    File.Delete(backup);
+                    PrepareWritable(appAsar);
+                    File.Move(appAsar, backup);
+                }
+                else
+                {
+                    PrepareWritable(appAsar);
+                    File.Delete(appAsar);
+                }
             }
 
             try
@@ -94,6 +148,10 @@ namespace EndcordInstaller
 
         public static void Unpatch(string resourcesDir)
         {
+            var parent = Directory.GetParent(resourcesDir);
+            if (parent != null)
+                RestoreLooseCore(parent.FullName);
+
             string appAsar = Path.Combine(resourcesDir, "app.asar");
             string backup = Path.Combine(resourcesDir, "_app.asar");
             string tmp = Path.Combine(resourcesDir, "app.asar.endcord-tmp");
@@ -341,11 +399,9 @@ namespace EndcordInstaller
         public string VersionLabel { get; set; }
         public bool IsInjected()
         {
-            if (IsMacBundle)
+            if (IsMacBundle || !string.IsNullOrEmpty(ResourcesPath))
                 return MacSupport.IsPatched(ResourcesPath);
-            string appDir = Path.Combine(ResourcesPath, "app");
-            string backupAsar = Path.Combine(ResourcesPath, "_app.asar");
-            return Directory.Exists(appDir) && File.Exists(backupAsar);
+            return false;
         }
     }
 }

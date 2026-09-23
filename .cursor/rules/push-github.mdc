@@ -1,0 +1,14 @@
+---
+description: 每次更新完成後都要提交並推上 GitHub
+alwaysApply: true
+---
+
+# 更新後推上 GitHub
+
+使用者要求每次程式更新都上傳到 https://github.com/ddg1174/Endcord-macOS 。
+
+- 正在改的檔案在 `C:\Users\yoyol\Downloads\Endcord-main\Endcord-main`，這個資料夾本身不是 git 倉庫。
+- git 倉庫在 `C:\Users\yoyol\Downloads\Endcord-macOS`，遠端是 `origin`，分支是 `main`。
+- 更新做完後，把變更同步到該倉庫（不要複製 `node_modules`、`.git`、`bin`、`obj`），提交，然後 `git push` 到 `origin main`。
+- `EndcordInstaller.exe` 被 `.gitignore` 忽略，若安裝程式有更新，用 `git add -f` 納入。
+- 不要改 git config，不要 force push。使用者沒有另外要求時，仍要推這次更新。

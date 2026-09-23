@@ -6,6 +6,7 @@
 
 import { onceDefined } from "@shared/onceDefined";
 import electron, { app, BrowserWindowConstructorOptions, Menu } from "electron";
+import { existsSync } from "fs";
 import { dirname, join } from "path";
 
 import { RendererSettings } from "./settings";
@@ -13,22 +14,35 @@ import { IS_VANILLA } from "./utils/constants";
 
 console.log("[Endcord] Starting up...");
 
-// Our injector file at app/index.js
+// Our injector file at app.asar/index.js (or the legacy resources/app/index.js).
 const injectorPath = require.main!.filename;
+const mainPath = require.main!.path;
 
-// special discord_arch_electron injection method
-const asarName = require.main!.path.endsWith("app.asar") ? "_app.asar" : "app.asar";
+// Requiring this file from discord_desktop_core leaves Electron's main as the
+// real app.asar. `_app.asar`.endsWith("app.asar") is true, so a second load
+// resolves `_app.asar` again and recurses. A missing `_app.asar` throws
+// before the splash can leave "Starting...". Only take over startup when we
+// are the app entry and the original package is sitting beside us.
+const alreadyInsideOriginal = mainPath.endsWith("_app.asar");
+let discordEntry: string | null = null;
 
-// The original app.asar
-const asarPath = join(dirname(injectorPath), "..", asarName);
+if (alreadyInsideOriginal) {
+    console.log("[Endcord] Already inside the original app; not loading it again.");
+} else {
+    const asarName = mainPath.endsWith("app.asar") ? "_app.asar" : "app.asar";
+    const asarPath = join(dirname(injectorPath), "..", asarName);
+    if (!existsSync(asarPath)) {
+        console.error("[Endcord] Original package not found at " + asarPath + ". Discord will continue without Endcord. Reinstall Endcord.");
+    } else {
+        const discordPkg = require(join(asarPath, "package.json"));
+        discordEntry = join(asarPath, discordPkg.main);
+        require.main!.filename = discordEntry;
+        // @ts-expect-error Untyped method? Dies from cringe
+        app.setAppPath(asarPath);
+    }
+}
 
-const discordPkg = require(join(asarPath, "package.json"));
-require.main!.filename = join(asarPath, discordPkg.main);
-
-// @ts-expect-error Untyped method? Dies from cringe
-app.setAppPath(asarPath);
-
-if (!IS_VANILLA) {
+if (discordEntry && !IS_VANILLA) {
     const settings = RendererSettings.store;
     // Repatch after host updates on Windows
     if (process.platform === "win32") {
@@ -133,7 +147,7 @@ if (!IS_VANILLA) {
             const disabledFeatures = new Set((args[1] ?? "").split(","));
             disabledFeatures.add("WidgetLayering");
             disabledFeatures.add("UseEcoQoSForBackgroundProcess");
-            args[1] += [...disabledFeatures].join(",");
+            args[1] = [...disabledFeatures].join(",");
         }
         return originalAppend.apply(this, args);
     };
@@ -146,9 +160,11 @@ if (!IS_VANILLA) {
     app.commandLine.appendSwitch("disable-renderer-backgrounding");
     app.commandLine.appendSwitch("disable-background-timer-throttling");
     app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
-} else {
+} else if (discordEntry) {
     console.log("[Endcord] Running in vanilla mode. Not loading Endcord");
 }
 
-console.log("[Endcord] Loading original Discord app.asar");
-require(require.main!.filename);
+if (discordEntry) {
+    console.log("[Endcord] Loading original Discord app.asar");
+    require(discordEntry);
+}

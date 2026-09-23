@@ -247,6 +247,43 @@ namespace EndcordInstaller
                 + "require(join(appData,\"Endcord\",\"dist\",\"patcher.js\"));";
         }
 
+        // Windows Discord keeps a loose discord_desktop_core module. Requiring
+        // the patcher from there makes startup recurse or throw, and the splash
+        // stays on "Starting...". Put the original index.js back before the asar swap.
+        public static void RestoreLooseCore(string appVersionDir)
+        {
+            if (string.IsNullOrEmpty(appVersionDir)) return;
+            string modulesDir = Path.Combine(appVersionDir, "modules");
+            if (!Directory.Exists(modulesDir)) return;
+
+            foreach (string dir in Directory.GetDirectories(modulesDir, "discord_desktop_core-*"))
+            {
+                string indexJs = Path.Combine(dir, "discord_desktop_core", "index.js");
+                if (!File.Exists(indexJs)) continue;
+
+                string bak = indexJs + ".bak";
+                if (File.Exists(bak))
+                {
+                    PrepareWritable(indexJs);
+                    File.Copy(bak, indexJs, true);
+                    try { File.Delete(bak); } catch { }
+                    continue;
+                }
+
+                string content = File.ReadAllText(indexJs);
+                if (!content.Contains("Endcord") && !content.Contains("patcher.js")) continue;
+
+                var kept = new System.Collections.Generic.List<string>();
+                foreach (string line in content.Replace("\r\n", "\n").Split('\n'))
+                {
+                    if (line.Contains("Endcord") || line.Contains("patcher.js")) continue;
+                    kept.Add(line);
+                }
+                PrepareWritable(indexJs);
+                File.WriteAllText(indexJs, string.Join("\n", kept));
+            }
+        }
+
         public static bool IsPatched(string resourcesDir)
         {
             if (string.IsNullOrEmpty(resourcesDir)) return false;
@@ -264,6 +301,10 @@ namespace EndcordInstaller
 
         public static void Patch(string resourcesDir)
         {
+            var parent = Directory.GetParent(resourcesDir);
+            if (parent != null)
+                RestoreLooseCore(parent.FullName);
+
             if (IsPatched(resourcesDir))
                 Unpatch(resourcesDir);
 
@@ -284,8 +325,21 @@ namespace EndcordInstaller
             }
             else
             {
-                PrepareWritable(appAsar);
-                File.Delete(appAsar);
+                long currentLen = new FileInfo(appAsar).Length;
+                long backupLen = new FileInfo(backup).Length;
+                bool currentLooksOriginal = currentLen > 1024 * 1024 && !FileContains(appAsar, "Endcord", 262144);
+                if (currentLooksOriginal && backupLen < currentLen)
+                {
+                    PrepareWritable(backup);
+                    File.Delete(backup);
+                    PrepareWritable(appAsar);
+                    File.Move(appAsar, backup);
+                }
+                else
+                {
+                    PrepareWritable(appAsar);
+                    File.Delete(appAsar);
+                }
             }
 
             try
@@ -302,6 +356,10 @@ namespace EndcordInstaller
 
         public static void Unpatch(string resourcesDir)
         {
+            var parent = Directory.GetParent(resourcesDir);
+            if (parent != null)
+                RestoreLooseCore(parent.FullName);
+
             string appAsar = Path.Combine(resourcesDir, "app.asar");
             string backup = Path.Combine(resourcesDir, "_app.asar");
             string tmp = Path.Combine(resourcesDir, "app.asar.endcord-tmp");
@@ -560,20 +618,14 @@ namespace EndcordInstaller
                 foreach (var appVerDir in appDirs)
                 {
                     string res = Path.Combine(appVerDir, "resources");
-                    string appDir = Path.Combine(res, "app");
-                    string asarDir = Path.Combine(res, "app.asar");
+                    if (MacSupport.IsPatched(res)) return true;
 
-                    if (Directory.Exists(appDir))
+                    string modulesDir = Path.Combine(appVerDir, "modules");
+                    if (!Directory.Exists(modulesDir)) continue;
+                    foreach (string dir in Directory.GetDirectories(modulesDir, "discord_desktop_core-*"))
                     {
-                        string indexJs = Path.Combine(appDir, "index.js");
-                        if (File.Exists(indexJs) && File.ReadAllText(indexJs).Contains("patcher.js"))
-                            return true;
-                    }
-
-                    if (Directory.Exists(asarDir))
-                    {
-                        string indexJs = Path.Combine(asarDir, "index.js");
-                        if (File.Exists(indexJs) && File.ReadAllText(indexJs).Contains("patcher.js"))
+                        string indexJs = Path.Combine(dir, "discord_desktop_core", "index.js");
+                        if (File.Exists(indexJs) && File.ReadAllText(indexJs).Contains("Endcord"))
                             return true;
                     }
                 }
@@ -1197,105 +1249,6 @@ namespace EndcordInstaller
             Win32Kernel.DeleteFile(path);
         }
 
-        // ─── INJECTION HELPERS ───────────────────────────────────────────────────
-
-        // Returns the path to discord_desktop_core index.js if found in modules folder
-        static string FindDesktopCoreIndex(string appVerDir)
-        {
-            string modulesDir = Path.Combine(appVerDir, "modules");
-            if (!Directory.Exists(modulesDir)) return null;
-
-            foreach (string dir in Directory.GetDirectories(modulesDir, "discord_desktop_core-*"))
-            {
-                // e.g. modules/discord_desktop_core-1/discord_desktop_core/index.js
-                string inner = Path.Combine(dir, "discord_desktop_core", "index.js");
-                if (File.Exists(inner)) return inner;
-            }
-            return null;
-        }
-
-        // Injects our patcher require into index.js (prepend, idempotent)
-        static void InjectDesktopCore(string indexJs)
-        {
-            string patcherLine = "require(require('path').join(process.env.APPDATA, 'Endcord', 'dist', 'patcher.js'));";
-
-            string existing = File.Exists(indexJs) ? File.ReadAllText(indexJs) : "";
-
-            // Make a backup of original if none exists
-            string bakPath = indexJs + ".bak";
-            if (!File.Exists(bakPath))
-                File.WriteAllText(bakPath, existing);
-
-            // Already patched? Skip.
-            if (existing.Contains("Endcord"))
-                return;
-
-            // Prepend our require line
-            File.WriteAllText(indexJs, patcherLine + "\n" + existing);
-        }
-
-        // Restores original index.js from .bak, or removes our patcher line
-        static void RestoreDesktopCore(string indexJs)
-        {
-            string bakPath = indexJs + ".bak";
-            if (File.Exists(bakPath))
-            {
-                File.Copy(bakPath, indexJs, overwrite: true);
-                File.Delete(bakPath);
-            }
-            else if (File.Exists(indexJs))
-            {
-                // Strip our patcher line manually
-                string content = File.ReadAllText(indexJs);
-                string[] lines = content.Split('\n');
-                var filtered = new System.Collections.Generic.List<string>();
-                foreach (var line in lines)
-                    if (!line.Contains("Endcord") && !line.Contains("patcher.js"))
-                        filtered.Add(line);
-                File.WriteAllText(indexJs, string.Join("\n", filtered));
-            }
-        }
-
-        static void SafeBackupAsar(string origAsar, string backupAsar)
-        {
-            if (!File.Exists(origAsar)) return;
-            if (File.Exists(backupAsar) && new FileInfo(backupAsar).Length > 100000) return;
-            Win32Kernel.CopyFile(origAsar, backupAsar, false);
-        }
-
-        static void SafeRestoreAsar(string resDir)
-        {
-            string appDir     = Path.Combine(resDir, "app");
-            string origAsar   = Path.Combine(resDir, "app.asar");
-            string backupAsar = Path.Combine(resDir, "_app.asar");
-
-            if (Directory.Exists(origAsar))
-            {
-                string trapped = Path.Combine(origAsar, "_app.asar");
-                if (File.Exists(trapped) && new FileInfo(trapped).Length > 100000)
-                {
-                    SafeDeleteFile(backupAsar);
-                    try { File.Move(trapped, backupAsar); } catch { }
-                }
-                SafeDeleteDir(origAsar);
-            }
-
-            if (Directory.Exists(appDir))
-            {
-                string idxFile = Path.Combine(appDir, "index.js");
-                if (File.Exists(idxFile)) SafeDeleteFile(idxFile);
-                SafeDeleteDir(appDir);
-            }
-
-            if (File.Exists(backupAsar))
-            {
-                SafeDeleteFile(origAsar);
-                Win32Kernel.CopyFile(backupAsar, origAsar, false);
-                if (File.Exists(origAsar) && new FileInfo(origAsar).Length > 100000)
-                    SafeDeleteFile(backupAsar);
-            }
-        }
-
         void DoInstall(List<DiscordClient> targets, bool repair)
         {
             SafeLog(repair ? "Starting Endcord repair..." : "Starting Endcord installation...", C.AccentLight);
@@ -1348,37 +1301,14 @@ namespace EndcordInstaller
                     bool patchedAny = false;
                     foreach (var appVerDir in appDirs)
                     {
-                        // ── PRIMARY: discord_desktop_core injection (modern Discord) ──
-                        string coreIndex = FindDesktopCoreIndex(appVerDir);
-                        if (coreIndex != null)
-                        {
-                            SafeLog("  [core] " + coreIndex, C.TextDim);
-                            InjectDesktopCore(coreIndex);
-                            patchedAny = true;
-                            continue;
-                        }
-
-                        // ── FALLBACK: legacy resources/app/index.js injection ────────
+                        // Same asar swap as macOS. Injecting discord_desktop_core
+                        // requires the patcher while Electron is already inside
+                        // app.asar, which throws or recurses and leaves the
+                        // splash on "Starting...".
                         string res = Path.Combine(appVerDir, "resources");
                         if (!Directory.Exists(res)) continue;
-
-                        string appDir     = Path.Combine(res, "app");
-                        string origAsar   = Path.Combine(res, "app.asar");
-                        string backupAsar = Path.Combine(res, "_app.asar");
-
-                        if (Directory.Exists(origAsar)) SafeRestoreAsar(res);
-                        SafeBackupAsar(origAsar, backupAsar);
-
-                        if (Directory.Exists(appDir)) SafeDeleteDir(appDir);
-                        Directory.CreateDirectory(appDir);
-
-                        File.WriteAllText(Path.Combine(appDir, "package.json"),
-                            "{\n  \"name\": \"discord\",\n  \"main\": \"index.js\"\n}");
-
-                        File.WriteAllText(Path.Combine(appDir, "index.js"),
-                            "require(require('path').join(process.env.APPDATA, 'Endcord', 'dist', 'patcher.js'));\n");
-
-                        SafeLog("  [legacy] " + appDir, C.TextDim);
+                        MacSupport.Patch(res);
+                        SafeLog("  [asar] " + res, C.TextDim);
                         patchedAny = true;
                     }
 
@@ -1419,18 +1349,16 @@ namespace EndcordInstaller
                     var appDirs = Directory.GetDirectories(c.RootPath, "app-*");
                     foreach (var appVerDir in appDirs)
                     {
-                        // ── PRIMARY: restore discord_desktop_core ──────────────────
-                        string coreIndex = FindDesktopCoreIndex(appVerDir);
-                        if (coreIndex != null)
+                        string res = Path.Combine(appVerDir, "resources");
+                        if (!Directory.Exists(res))
                         {
-                            RestoreDesktopCore(coreIndex);
+                            MacSupport.RestoreLooseCore(appVerDir);
                             continue;
                         }
-
-                        // ── FALLBACK: restore legacy resources/app ─────────────────
-                        string res = Path.Combine(appVerDir, "resources");
-                        if (!Directory.Exists(res)) continue;
-                        SafeRestoreAsar(res);
+                        if (MacSupport.IsPatched(res))
+                            MacSupport.Unpatch(res);
+                        else
+                            MacSupport.RestoreLooseCore(appVerDir);
                     }
                     SafeLog("Successfully uninstalled from " + c.Name, C.Green);
                 }
@@ -1498,7 +1426,14 @@ namespace EndcordInstaller
             var asm = Assembly.GetExecutingAssembly();
             string match = null;
             foreach (var n in asm.GetManifestResourceNames())
-                if (n.EndsWith(name, StringComparison.OrdinalIgnoreCase)) { match = n; break; }
+            {
+                if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)
+                    || n.EndsWith("." + name, StringComparison.OrdinalIgnoreCase))
+                {
+                    match = n;
+                    break;
+                }
+            }
             if (match != null)
             {
                 using (var s = asm.GetManifestResourceStream(match))
