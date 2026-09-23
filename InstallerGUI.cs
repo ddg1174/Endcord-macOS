@@ -167,9 +167,9 @@ namespace EndcordInstaller
 
     static class F
     {
-        public static readonly Font LargeTitle = new Font("Segoe UI", 15, FontStyle.Bold);
-        public static readonly Font Title      = new Font("Segoe UI Semibold", 10.5f, FontStyle.Bold);
-        public static readonly Font Subtitle   = new Font("Segoe UI", 8.5f, FontStyle.Regular);
+        public static readonly Font LargeTitle = new Font("Segoe UI", 22, FontStyle.Bold);
+        public static readonly Font Title      = new Font("Segoe UI Semibold", 11f, FontStyle.Bold);
+        public static readonly Font Subtitle   = new Font("Segoe UI", 10f, FontStyle.Regular);
         public static readonly Font Code       = new Font("Consolas", 8.5f, FontStyle.Regular);
         public static readonly Font TabText    = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
         public static readonly Font ButtonText = new Font("Segoe UI Semibold", 10, FontStyle.Bold);
@@ -738,16 +738,12 @@ namespace EndcordInstaller
         List<DiscordClient> clients = new List<DiscordClient>();
         List<ClientCard>    cards   = new List<ClientCard>();
 
-        // Controls
-        Panel sidebarPanel, mainContent, titleBar, statusBar;
-        FlowLayoutPanel clientFlow;
+        Panel clientList;
         RichTextBox logBox;
         CustomProgress progress;
-        CustomCheckBox chkAll, chkRestart;
-        CustomLink btnRefresh, btnAddPath;
+        CustomCheckBox chkRestart;
         Label lblStatus;
-        CustomActionButton btnAction;
-        SidebarTab[] sidebarTabs = new SidebarTab[4];
+        PillButton btnInstall, btnRepair, btnUninstall, btnKill, btnRefresh, btnAddPath;
 
         static readonly Image LogoImg = GetEmbeddedLogo();
 
@@ -799,8 +795,6 @@ namespace EndcordInstaller
             return null;
         }
 
-        int activeTab = 0; // 0=Install, 1=Uninstall, 2=Repair, 3=Kill Discord
-
         public MainForm()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.DoubleBuffer, true);
@@ -815,293 +809,280 @@ namespace EndcordInstaller
             RefreshClients();
         }
 
-        protected override void OnResize(EventArgs e)
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        protected override void OnHandleCreated(EventArgs e)
         {
-            base.OnResize(e);
-            IntPtr ptr = CreateRoundRectRgn(0, 0, Width, Height, 20, 20);
-            Region = System.Drawing.Region.FromHrgn(ptr);
-            DeleteObject(ptr);
+            base.OnHandleCreated(e);
+            try
+            {
+                int dark = 1;
+                if (DwmSetWindowAttribute(Handle, 20, ref dark, 4) != 0)
+                    DwmSetWindowAttribute(Handle, 19, ref dark, 4);
+            }
+            catch { }
         }
 
         void BuildUI()
         {
+            AutoScaleMode   = AutoScaleMode.None;
             Text            = "Endcord Installer";
-            ClientSize      = new Size(820, 580);
-            MinimumSize     = new Size(820, 580);
+            ClientSize      = new Size(860, 680);
+            MinimumSize     = new Size(760, 620);
             BackColor       = C.Bg;
             ForeColor       = C.Text;
-            FormBorderStyle = FormBorderStyle.None;
+            Font            = F.Subtitle;
+            FormBorderStyle = FormBorderStyle.Sizable;
             StartPosition   = FormStartPosition.CenterScreen;
 
-            // ── TITLE BAR ──────────────────────────────────────────
-            titleBar = new DBPanel();
-            titleBar.Dock = DockStyle.Top;
-            titleBar.Height = 44;
-            titleBar.BackColor = C.Sidebar;
-            titleBar.Paint += (s, e) =>
+            var header = new Panel { BackColor = C.Bg };
+            header.Controls.Add(new Label
             {
-                var g = e.Graphics;
-                g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-                int textX = 16;
-                if (LogoImg != null)
-                {
-                    g.DrawImage(LogoImg, new Rectangle(14, 8, 28, 28));
-                    textX = 50;
-                }
-                TextRenderer.DrawText(g, "Endcord Installer", F.Title,
-                    new Rectangle(textX, 0, 260, 44), C.Text,
-                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+                Text = "Endcord",
+                Font = F.LargeTitle,
+                ForeColor = C.Text,
+                AutoSize = true,
+                Location = new Point(0, 0)
+            });
+            header.Controls.Add(new Label
+            {
+                Text = "Windows 圖形安裝程式",
+                Font = new Font("Segoe UI", 11f),
+                ForeColor = C.AccentLight,
+                AutoSize = true,
+                Location = new Point(2, 40)
+            });
+
+            var hint = new Label
+            {
+                Text = "會尋找本機的 Discord、Canary、PTB、Development。",
+                Font = F.Subtitle,
+                ForeColor = C.TextDim,
+                TextAlign = ContentAlignment.MiddleLeft
             };
 
-            var bClose = WinBtn("r", C.Red, DockStyle.Right);
-            var bMin   = WinBtn("0", C.TextDim, DockStyle.Right);
-            bClose.Click += (s, e) => Application.Exit();
-            bMin.Click   += (s, e) => WindowState = FormWindowState.Minimized;
-            titleBar.Controls.Add(bClose);
-            titleBar.Controls.Add(bMin);
-
-            // Drag window events
-            bool drag = false; Point dp = Point.Empty;
-            titleBar.MouseDown += (s, e) => { if (e.Button == MouseButtons.Left) { drag = true; dp = e.Location; } };
-            titleBar.MouseMove += (s, e) => { if (drag) Location = new Point(Location.X + e.X - dp.X, Location.Y + e.Y - dp.Y); };
-            titleBar.MouseUp   += (s, e) => drag = false;
-
-            // ── SIDEBAR PANEL ───────────────────────────────────────
-            sidebarPanel = new DBPanel();
-            sidebarPanel.Dock = DockStyle.Left;
-            sidebarPanel.Width = 210;
-            sidebarPanel.BackColor = C.Sidebar;
-
-            string[] tabTitles = { "Install Endcord", "Uninstall", "Repair Install", "Close Discord" };
-            string[] tabDesc   = { "Inject client mod", "Restore vanilla", "Fix system files", "Force exit clients" };
-
-            for (int i = 0; i < 4; i++)
+            var listCard = new DBPanel
             {
-                int idx = i;
-                var tab = new SidebarTab(tabTitles[i], tabDesc[i], idx == 0);
-                tab.Top = 16 + i * 58;
-                tab.Left = 10;
-                tab.Width = 190;
-                tab.Click += (s, e) => SwitchTab(idx);
-                sidebarTabs[i] = tab;
-                sidebarPanel.Controls.Add(tab);
+                BackColor = Color.FromArgb(16, 17, 28),
+                Margin = new Padding(0, 4, 0, 8),
+                Padding = new Padding(12, 12, 6, 12)
+            };
+            listCard.Paint += (s, e) =>
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                var r = new Rectangle(0, 0, listCard.Width - 1, listCard.Height - 1);
+                Gfx.DrawRoundRect(e.Graphics, r, 12, C.Border, 1f);
+            };
+            clientList = new Panel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = true,
+                BackColor = Color.FromArgb(16, 17, 28)
+            };
+            clientList.Resize += (s, e) => FitCards();
+            listCard.Controls.Add(clientList);
+
+            var actions = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                AutoScroll = false,
+                BackColor = C.Bg,
+                Margin = new Padding(0, 4, 0, 0),
+                Padding = new Padding(0, 6, 0, 0)
+            };
+            btnInstall = new PillButton("安裝", Color.FromArgb(99, 102, 241));
+            btnRepair = new PillButton("修復", Color.FromArgb(79, 70, 229));
+            btnUninstall = new PillButton("移除", Color.FromArgb(239, 68, 68));
+            btnKill = new PillButton("關閉 Discord", Color.FromArgb(245, 158, 11));
+            btnRefresh = new PillButton("重新整理", Color.FromArgb(31, 41, 55));
+            btnAddPath = new PillButton("自訂路徑", Color.FromArgb(31, 41, 55));
+            btnInstall.Click += (s, e) => StartInstall(false);
+            btnRepair.Click += (s, e) => StartInstall(true);
+            btnUninstall.Click += (s, e) => StartUninstall();
+            btnKill.Click += (s, e) => DoKill();
+            btnRefresh.Click += (s, e) => RefreshClients();
+            btnAddPath.Click += BtnAddPath_Click;
+            actions.Controls.Add(btnInstall);
+            actions.Controls.Add(btnRepair);
+            actions.Controls.Add(btnUninstall);
+            actions.Controls.Add(btnKill);
+            actions.Controls.Add(btnRefresh);
+            actions.Controls.Add(btnAddPath);
+
+            var logCard = new Panel
+            {
+                BackColor = Color.FromArgb(18, 20, 31),
+                Padding = new Padding(10, 8, 10, 8),
+                Margin = new Padding(0, 8, 0, 6)
+            };
+            logCard.Paint += (s, e) =>
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                var r = new Rectangle(0, 0, logCard.Width - 1, logCard.Height - 1);
+                Gfx.DrawRoundRect(e.Graphics, r, 8, C.Border, 1f);
+            };
+            logBox = new RichTextBox
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(18, 20, 31),
+                ForeColor = Color.FromArgb(209, 213, 219),
+                BorderStyle = BorderStyle.None,
+                Font = F.Code,
+                ReadOnly = true,
+                DetectUrls = false,
+                ScrollBars = RichTextBoxScrollBars.Vertical
+            };
+            logCard.Controls.Add(logBox);
+
+            var statusRow = new Panel
+            {
+                BackColor = C.Bg,
+                Margin = new Padding(0),
+                Height = 28
+            };
+            lblStatus = new Label
+            {
+                Text = "就緒",
+                Font = F.Subtitle,
+                ForeColor = C.TextDim,
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Dock = DockStyle.Left,
+                Width = 280
+            };
+            progress = new CustomProgress { Dock = DockStyle.Right, Width = 140, Visible = false };
+            chkRestart = new CustomCheckBox("完成後重新開啟 Discord")
+            {
+                Dock = DockStyle.Right,
+                Width = 230,
+                Checked = true
+            };
+            statusRow.Controls.Add(lblStatus);
+            statusRow.Controls.Add(progress);
+            statusRow.Controls.Add(chkRestart);
+
+            Controls.Add(header);
+            Controls.Add(hint);
+            Controls.Add(listCard);
+            Controls.Add(actions);
+            Controls.Add(logCard);
+            Controls.Add(statusRow);
+
+            void Place()
+            {
+                int pad = 22;
+                int w = Math.Max(200, ClientSize.Width - pad * 2);
+                int y = 16;
+                header.SetBounds(pad, y, w, 68);
+                y += 72;
+                hint.SetBounds(pad, y, w, 28);
+                y += 34;
+
+                int statusH = 28;
+                int logH = 150;
+                int btnH = 48;
+                int bottom = ClientSize.Height - 14;
+                int statusY = bottom - statusH;
+                int logY = statusY - 8 - logH;
+                int btnY = logY - 8 - btnH;
+                int listH = btnY - 8 - y;
+                if (listH < 120)
+                {
+                    listH = 120;
+                    btnY = y + listH + 8;
+                    logY = btnY + btnH + 8;
+                    statusY = logY + logH + 8;
+                }
+                listCard.SetBounds(pad, y, w, listH);
+                actions.SetBounds(pad, btnY, w, btnH);
+                logCard.SetBounds(pad, logY, w, logH);
+                statusRow.SetBounds(pad, statusY, w, statusH);
             }
 
-            // ── STATUS BAR ──────────────────────────────────────────
-            statusBar = new DBPanel();
-            statusBar.Dock = DockStyle.Bottom;
-            statusBar.Height = 36;
-            statusBar.BackColor = C.Sidebar;
-
-            lblStatus = new Label();
-            lblStatus.Font = F.Subtitle;
-            lblStatus.ForeColor = C.TextDim;
-            lblStatus.Location = new Point(16, 9);
-            lblStatus.AutoSize = true;
-            lblStatus.Text = "Ready";
-            statusBar.Controls.Add(lblStatus);
-
-            progress = new CustomProgress();
-            progress.Dock = DockStyle.Right;
-            progress.Width = 220;
-            progress.Visible = false;
-            statusBar.Controls.Add(progress);
-
-            // ── MAIN CONTENT AREA ────────────────────────────────────
-            mainContent = new DBPanel();
-            mainContent.Dock = DockStyle.Fill;
-            mainContent.Padding = new Padding(20, 16, 20, 16);
-
-            // Header bar
-            var headPanel = new DBPanel();
-            headPanel.Dock = DockStyle.Top;
-            headPanel.Height = 32;
-
-            var lblDetected = new Label();
-            lblDetected.Text = "DETECTED DISCORD INSTALLATIONS";
-            lblDetected.Font = F.MutedText;
-            lblDetected.ForeColor = C.TextDark;
-            lblDetected.Location = new Point(0, 8);
-            lblDetected.AutoSize = true;
-            headPanel.Controls.Add(lblDetected);
-
-            btnRefresh = new CustomLink("Refresh");
-            btnRefresh.Dock = DockStyle.Right;
-            btnRefresh.Width = 65;
-            btnRefresh.Click += (s, e) => RefreshClients();
-            headPanel.Controls.Add(btnRefresh);
-
-            btnAddPath = new CustomLink("+ Custom Path");
-            btnAddPath.Dock = DockStyle.Right;
-            btnAddPath.Width = 100;
-            btnAddPath.Click += BtnAddPath_Click;
-            headPanel.Controls.Add(btnAddPath);
-
-            mainContent.Controls.Add(headPanel);
-
-            // Client Cards Flow
-            clientFlow = new FlowLayoutPanel();
-            clientFlow.Dock = DockStyle.Top;
-            clientFlow.Height = 220;
-            clientFlow.AutoScroll = true;
-            clientFlow.WrapContents = false;
-            clientFlow.FlowDirection = FlowDirection.TopDown;
-            clientFlow.Padding = new Padding(0, 4, 0, 4);
-            mainContent.Controls.Add(clientFlow);
-
-            // Options Bar
-            var optsPanel = new DBPanel();
-            optsPanel.Dock = DockStyle.Top;
-            optsPanel.Height = 32;
-
-            chkAll = new CustomCheckBox("Select All");
-            chkAll.Location = new Point(0, 4);
-            chkAll.Width = 100;
-            chkAll.CheckedChanged += (s, e) =>
-            {
-                foreach (var c in cards) c.Selected = chkAll.Checked;
-            };
-            optsPanel.Controls.Add(chkAll);
-
-            chkRestart = new CustomCheckBox("Relaunch Discord after action");
-            chkRestart.Location = new Point(120, 4);
-            chkRestart.Width = 230;
-            chkRestart.Checked = true;
-            optsPanel.Controls.Add(chkRestart);
-
-            mainContent.Controls.Add(optsPanel);
-
-            // Console Log Box
-            logBox = new RichTextBox();
-            logBox.Dock = DockStyle.Fill;
-            logBox.BackColor = C.Sidebar;
-            logBox.ForeColor = C.TextDim;
-            logBox.BorderStyle = BorderStyle.None;
-            logBox.Font = F.Code;
-            logBox.ReadOnly = true;
-            logBox.Margin = new Padding(0, 8, 0, 8);
-            mainContent.Controls.Add(logBox);
-
-            // Bottom Action Bar
-            var actPanel = new DBPanel();
-            actPanel.Dock = DockStyle.Bottom;
-            actPanel.Height = 52;
-
-            btnAction = new CustomActionButton("INSTALL ENDCORD");
-            btnAction.Dock = DockStyle.Right;
-            btnAction.Width = 220;
-            btnAction.Click += (s, e) =>
-            {
-                if (activeTab == 3) DoKill();
-                else DoOperation();
-            };
-            actPanel.Controls.Add(btnAction);
-
-            mainContent.Controls.Add(actPanel);
-
-            // Assemble Form
-            Controls.Add(mainContent);
-            Controls.Add(sidebarPanel);
-            Controls.Add(statusBar);
-            Controls.Add(titleBar);
+            Resize += (s, e) => Place();
+            Shown += (s, e) => Place();
+            DpiChanged += (s, e) => Place();
+            Place();
         }
 
-        Control WinBtn(string sym, Color hovCol, DockStyle dock)
+        List<DiscordClient> SelectedClients()
         {
-            var b = new Label();
-            b.Text = sym == "r" ? "✕" : "—";
-            b.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            b.ForeColor = C.TextDim;
-            b.TextAlign = ContentAlignment.MiddleCenter;
-            b.Size = new Size(44, 44);
-            b.Dock = dock;
-            b.Cursor = Cursors.Hand;
-            b.MouseEnter += (s, e) => { b.BackColor = hovCol; b.ForeColor = Color.White; };
-            b.MouseLeave += (s, e) => { b.BackColor = Color.Transparent; b.ForeColor = C.TextDim; };
-            return b;
+            var list = new List<DiscordClient>();
+            for (int i = 0; i < cards.Count && i < clients.Count; i++)
+                if (cards[i].Selected) list.Add(clients[i]);
+            return list;
         }
 
-        void SwitchTab(int idx)
+        void FitCards()
         {
-            activeTab = idx;
-            for (int i = 0; i < 4; i++) sidebarTabs[i].SetActive(i == idx);
-
-            chkAll.Checked = true;
-            foreach (var c in cards) c.Selected = true;
-
-            string[] actionTexts = { "INSTALL ENDCORD", "UNINSTALL ENDCORD", "REPAIR INSTALLATION", "CLOSE ALL DISCORD" };
-            btnAction.Text = actionTexts[activeTab];
-            SetStatus("Selected Mode: " + tabTitlesText[activeTab]);
+            if (clientList == null) return;
+            int w = clientList.ClientSize.Width - 8;
+            if (w < 240) w = 240;
+            int y = 2;
+            foreach (var card in cards)
+            {
+                card.SetBounds(0, y, w, 64);
+                y += 72;
+            }
         }
-
-        static readonly string[] tabTitlesText = { "Install", "Uninstall", "Repair", "Kill Discord" };
 
         // ── DETECT DISCORD INSTALLATIONS ────────────────────────────
         void RefreshClients()
         {
-            clients.Clear(); cards.Clear(); clientFlow.Controls.Clear();
+            clients.Clear();
+            cards.Clear();
+            clientList.Controls.Clear();
 
             if (MacSupport.IsMac())
             {
                 foreach (var c in MacSupport.FindApps())
-                {
-                    clients.Add(c);
-                    var card = new ClientCard(c);
-                    card.Width = 560;
-                    card.Selected = true;
-                    cards.Add(card);
-                    clientFlow.Controls.Add(card);
-                }
-                chkAll.Checked = true;
-                if (clients.Count == 0)
-                {
-                    Log("No Discord.app found in /Applications or ~/Applications.", C.Amber);
-                    SetStatus("No Discord installations found");
-                }
-                else
-                {
-                    Log("Detected " + clients.Count + " Discord client installation(s).", C.Green);
-                    SetStatus("Ready");
-                }
-                return;
-            }
-
-            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string[,] paths = {
-                { "Discord Stable",Path.Combine(local, "Discord"),            "Discord.exe" },
-                { "Discord Canary",Path.Combine(local, "DiscordCanary"),     "DiscordCanary.exe" },
-                { "Discord PTB",   Path.Combine(local, "DiscordPTB"),        "DiscordPTB.exe" },
-                { "Discord Dev",   Path.Combine(local, "DiscordDevelopment"),"DiscordDevelopment.exe" }
-            };
-
-            var allDetected = new List<DiscordClient>();
-            for (int i = 0; i < 4; i++)
-            {
-                var c = GetClient(paths[i, 0], paths[i, 1], paths[i, 2]);
-                if (c != null) allDetected.Add(c);
-            }
-
-            foreach (var c in allDetected)
-            {
-                clients.Add(c);
-                var card = new ClientCard(c);
-                card.Width = 560;
-                card.Selected = true;
-                cards.Add(card);
-                clientFlow.Controls.Add(card);
-            }
-            chkAll.Checked = true;
-
-            if (clients.Count == 0)
-            {
-                Log("No Discord installations detected on this machine.", C.Amber);
-                SetStatus("No Discord installations found");
+                    AddCard(c);
             }
             else
             {
-                Log("Detected " + clients.Count + " Discord client installation(s).", C.Green);
-                SetStatus("Ready");
+                string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string[,] paths = {
+                    { "Discord", Path.Combine(local, "Discord"), "Discord.exe" },
+                    { "Discord Canary", Path.Combine(local, "DiscordCanary"), "DiscordCanary.exe" },
+                    { "Discord PTB", Path.Combine(local, "DiscordPTB"), "DiscordPTB.exe" },
+                    { "Discord Development", Path.Combine(local, "DiscordDevelopment"), "DiscordDevelopment.exe" }
+                };
+                for (int i = 0; i < 4; i++)
+                {
+                    var c = GetClient(paths[i, 0], paths[i, 1], paths[i, 2]);
+                    if (c != null) AddCard(c);
+                }
             }
+
+            if (clients.Count == 0)
+            {
+                clientList.Controls.Add(new Label
+                {
+                    Text = "沒有找到 Discord。",
+                    ForeColor = C.Amber,
+                    Font = F.Subtitle,
+                    AutoSize = true,
+                    Location = new Point(8, 12)
+                });
+                Log("沒有找到 Discord。", C.Amber);
+                SetStatus("沒有找到 Discord");
+            }
+            else
+            {
+                FitCards();
+                Log("找到 " + clients.Count + " 個 Discord。", C.TextDim);
+                SetStatus("找到 " + clients.Count + " 個 Discord");
+            }
+        }
+
+        void AddCard(DiscordClient client)
+        {
+            clients.Add(client);
+            var card = new ClientCard(client) { Selected = true };
+            cards.Add(card);
+            clientList.Controls.Add(card);
         }
 
         DiscordClient GetClient(string name, string root, string exe)
@@ -1135,12 +1116,8 @@ namespace EndcordInstaller
         {
             var c = GetClient(name, root, exe);
             if (c == null) return false;
-            clients.Add(c);
-            var card = new ClientCard(c);
-            card.Width = 560;
-            card.Selected = true;
-            cards.Add(card);
-            clientFlow.Controls.Add(card);
+            AddCard(c);
+            FitCards();
             return true;
         }
 
@@ -1150,80 +1127,89 @@ namespace EndcordInstaller
             {
                 if (dlg.ShowDialog() != DialogResult.OK) return;
                 string p = dlg.SelectedPath.Trim();
-                if (!Directory.Exists(p)) { Log("Directory does not exist: " + p, C.Red); return; }
+                if (!Directory.Exists(p)) { Log("找不到這個資料夾：" + p, C.Red); return; }
                 if (MacSupport.IsMac() || p.EndsWith(".app", StringComparison.OrdinalIgnoreCase))
                 {
                     var mac = MacSupport.ParseAppFromUserPath(p);
-                    if (mac == null) { Log("Failed to find a Discord.app in: " + p, C.Red); return; }
-                    clients.Add(mac);
-                    var card = new ClientCard(mac);
-                    card.Width = 560;
-                    card.Selected = true;
-                    cards.Add(card);
-                    clientFlow.Controls.Add(card);
-                    Log("Added custom path: " + mac.RootPath, C.Green);
+                    if (mac == null) { Log("這個路徑裡沒有 Discord.app：" + p, C.Red); return; }
+                    AddCard(mac);
+                    FitCards();
+                    Log("已加入 " + mac.RootPath, C.Green);
+                    SetStatus("找到 " + clients.Count + " 個 Discord");
                     return;
                 }
-                bool ok = TryAddClient("Custom Path", p, "Discord.exe");
+                bool ok = TryAddClient("Discord", p, "Discord.exe");
                 if (!ok)
                 {
                     var parent = Directory.GetParent(p);
-                    if (parent != null) ok = TryAddClient("Custom Path", parent.FullName, "Discord.exe");
+                    if (parent != null) ok = TryAddClient("Discord", parent.FullName, "Discord.exe");
                 }
-                if (ok) Log("Added custom path: " + p, C.Green);
-                else Log("Failed to find valid Discord in: " + p, C.Red);
+                if (ok)
+                {
+                    Log("已加入 " + p, C.Green);
+                    SetStatus("找到 " + clients.Count + " 個 Discord");
+                }
+                else Log("這個路徑裡沒有 Discord：" + p, C.Red);
             }
         }
 
-        // ── ACTION LOGIC ───────────────────────────────────────────
         void DoKill()
         {
             SetBusy(true);
+            SetStatus("正在關閉 Discord...");
             new Thread(() =>
             {
-                SafeLog("Stopping all running Discord instances...", C.TextDim);
+                SafeLog("正在關閉 Discord...", C.TextDim);
                 KillAllDiscordInstances();
-                SafeLog("All Discord instances closed successfully.", C.Green);
-                Invoke(new Action(() => { SetBusy(false); SetStatus("Discord terminated"); }));
+                SafeLog("已關閉 Discord。", C.Green);
+                Invoke(new Action(() =>
+                {
+                    SetBusy(false);
+                    RefreshClients();
+                    SetStatus("已關閉 Discord");
+                }));
             }) { IsBackground = true }.Start();
         }
 
-        void DoOperation()
+        void StartInstall(bool repair)
         {
-            var targets = new List<DiscordClient>();
-            for (int i = 0; i < cards.Count; i++)
-                if (cards[i].Selected) targets.Add(clients[i]);
+            RunTargets(repair ? "正在修復..." : "正在安裝...", targets => DoInstall(targets, repair), true);
+        }
 
-            if (targets.Count == 0) { Log("Please select at least one Discord version.", C.Amber); return; }
+        void StartUninstall()
+        {
+            RunTargets("正在移除...", targets => DoUninstall(targets), true);
+        }
+
+        void RunTargets(string status, Action<List<DiscordClient>> work, bool canRelaunch)
+        {
+            var targets = SelectedClients();
+            if (targets.Count == 0) { Log("請先勾選至少一個 Discord。", C.Amber); return; }
 
             SetBusy(true);
-            progress.Value = 0; progress.Visible = true;
+            progress.Value = 0;
+            progress.Visible = true;
+            SetStatus(status);
+            bool relaunch = canRelaunch && chkRestart.Checked;
 
             new Thread(() =>
             {
                 try
                 {
-                    SafeLog("Closing selected target Discord instances...", C.TextDim);
+                    SafeLog("正在關閉選取的 Discord...", C.TextDim);
                     KillTargetDiscordClients(targets);
-                    Thread.Sleep(1200);
-
-                    if (activeTab == 0 || activeTab == 2)
-                        DoInstall(targets, activeTab == 2);
-                    else
-                        DoUninstall(targets);
-
-                    Thread.Sleep(1000);
-                    if (chkRestart.Checked)
+                    Thread.Sleep(800);
+                    work(targets);
+                    if (relaunch)
                     {
                         foreach (var c in targets)
                         {
-                            SafeLog("Relaunching " + c.Name + "...", C.Blue);
+                            SafeLog("正在重新開啟 " + c.Name + "...", C.Blue);
                             c.Launch();
                         }
                     }
-                    SafeLog("Operation finished successfully.", C.Green);
                 }
-                catch (Exception ex) { SafeLog("Error occurred: " + ex.Message, C.Red); }
+                catch (Exception ex) { SafeLog("失敗：" + ex.Message, C.Red); }
                 finally
                 {
                     Invoke(new Action(() =>
@@ -1251,7 +1237,7 @@ namespace EndcordInstaller
 
         void DoInstall(List<DiscordClient> targets, bool repair)
         {
-            SafeLog(repair ? "Starting Endcord repair..." : "Starting Endcord installation...", C.AccentLight);
+            SafeLog(repair ? "正在修復..." : "正在安裝...", C.AccentLight);
             SetProg(5);
 
             // ── Step 1: Extract dist files ────────────────────────────────────────
@@ -1260,7 +1246,7 @@ namespace EndcordInstaller
                 Directory.CreateDirectory(DistPath);
                 string[] files = { "patcher.js","patcher.js.map","preload.js","preload.js.map",
                                    "renderer.js","renderer.js.map","renderer.css","renderer.css.map" };
-                SafeLog("Extracting Endcord system files...", C.TextDim);
+                SafeLog("正在複製 Endcord 檔案...", C.TextDim);
                 for (int i = 0; i < files.Length; i++)
                 {
                     string dest = Path.Combine(DistPath, files[i]);
@@ -1269,9 +1255,9 @@ namespace EndcordInstaller
                     SetProg(5 + 40 * (i + 1) / files.Length);
                 }
             }
-            catch (Exception ex) { SafeLog("Extraction failed: " + ex.Message, C.Red); return; }
+            catch (Exception ex) { SafeLog("複製失敗：" + ex.Message, C.Red); return; }
 
-            SafeLog("Injecting patcher into Discord clients...", C.TextDim);
+            SafeLog("正在寫入 Discord...", C.TextDim);
             SetProg(48);
 
             // ── Step 2: Inject into each Discord version ──────────────────────────
@@ -1287,16 +1273,16 @@ namespace EndcordInstaller
                     {
                         MacSupport.Patch(c.ResourcesPath);
                         if (MacSupport.Resign(c.RootPath))
-                            SafeLog("Successfully patched " + c.Name + " (" + c.Version + ")", C.Green);
+                            SafeLog("已安裝到 " + c.Name + "（" + c.Version + "）", C.Green);
                         else
-                            SafeLog("Patched " + c.Name + ", but codesign failed. macOS may block launch.", C.Amber);
+                            SafeLog("已寫入 " + c.Name + "，但 codesign 失敗，macOS 可能不讓它開啟。", C.Amber);
                         SetProg(48 + 52 * (i + 1) / targets.Count);
                         continue;
                     }
 
                     var appDirs = Directory.GetDirectories(c.RootPath, "app-*");
                     if (appDirs.Length == 0)
-                        SafeLog("No app-* version folders found for " + c.Name, C.Red);
+                        SafeLog(c.Name + " 裡沒有 app-* 版本資料夾", C.Red);
 
                     bool patchedAny = false;
                     foreach (var appVerDir in appDirs)
@@ -1308,25 +1294,25 @@ namespace EndcordInstaller
                         string res = Path.Combine(appVerDir, "resources");
                         if (!Directory.Exists(res)) continue;
                         MacSupport.Patch(res);
-                        SafeLog("  [asar] " + res, C.TextDim);
+                        SafeLog("已寫入 " + Path.GetFileName(Path.GetDirectoryName(res)), C.TextDim);
                         patchedAny = true;
                     }
 
                     if (patchedAny)
-                        SafeLog("Successfully patched " + c.Name + " (" + c.Version + ")", C.Green);
+                        SafeLog("已安裝到 " + c.Name + "（" + c.Version + "）", C.Green);
                     else
-                        SafeLog("No patchable paths found for " + c.Name, C.Red);
+                        SafeLog("找不到可以寫入的位置：" + c.Name, C.Red);
                 }
-                catch (Exception ex) { SafeLog("Failed patching " + c.Name + ": " + ex.Message, C.Red); }
+                catch (Exception ex) { SafeLog(c.Name + " 安裝失敗：" + ex.Message, C.Red); }
                 SetProg(48 + 52 * (i + 1) / targets.Count);
             }
-            SafeLog("Operations complete.", C.AccentLight);
+            SafeLog(repair ? "修復完成。" : "安裝完成。", C.AccentLight);
             SetProg(100);
         }
 
         void DoUninstall(List<DiscordClient> targets)
         {
-            SafeLog("Removing Endcord from selected installations...", C.AccentLight);
+            SafeLog("正在移除...", C.AccentLight);
             for (int i = 0; i < targets.Count; i++)
             {
                 var c = targets[i];
@@ -1339,9 +1325,9 @@ namespace EndcordInstaller
                     {
                         MacSupport.Unpatch(c.ResourcesPath);
                         if (MacSupport.Resign(c.RootPath))
-                            SafeLog("Successfully uninstalled from " + c.Name, C.Green);
+                            SafeLog("已從 " + c.Name + " 移除", C.Green);
                         else
-                            SafeLog("Uninstalled from " + c.Name + ", but codesign failed.", C.Amber);
+                            SafeLog("已從 " + c.Name + " 移除，但 codesign 失敗。", C.Amber);
                         SetProg(100 * (i + 1) / targets.Count);
                         continue;
                     }
@@ -1360,9 +1346,9 @@ namespace EndcordInstaller
                         else
                             MacSupport.RestoreLooseCore(appVerDir);
                     }
-                    SafeLog("Successfully uninstalled from " + c.Name, C.Green);
+                    SafeLog("已從 " + c.Name + " 移除", C.Green);
                 }
-                catch (Exception ex) { SafeLog("Failed to restore " + c.Name + ": " + ex.Message, C.Red); }
+                catch (Exception ex) { SafeLog(c.Name + " 移除失敗：" + ex.Message, C.Red); }
                 SetProg(100 * (i + 1) / targets.Count);
             }
 
@@ -1372,7 +1358,7 @@ namespace EndcordInstaller
             }
             catch { }
 
-            SafeLog("Uninstall complete.", C.AccentLight);
+            SafeLog("移除完成。", C.AccentLight);
         }
 
         static void ForceKillClient(DiscordClient c)
@@ -1463,7 +1449,7 @@ namespace EndcordInstaller
         {
             logBox.SelectionStart = logBox.TextLength;
             logBox.SelectionColor = col;
-            logBox.AppendText(DateTime.Now.ToString("[HH:mm:ss]  ") + msg + "\n");
+            logBox.AppendText(DateTime.Now.ToString("HH:mm:ss") + "  " + msg + "\n");
             logBox.ScrollToCaret();
         }
         void SafeLog(string m, Color c)
@@ -1474,10 +1460,13 @@ namespace EndcordInstaller
         { if (InvokeRequired) Invoke(new Action(() => lblStatus.Text = s)); else lblStatus.Text = s; }
         void SetBusy(bool b)
         {
-            btnAction.Enabled = !b;
+            btnInstall.Enabled = !b;
+            btnRepair.Enabled = !b;
+            btnUninstall.Enabled = !b;
+            btnKill.Enabled = !b;
             btnRefresh.Enabled = !b;
             btnAddPath.Enabled = !b;
-            chkAll.Enabled = !b;
+            chkRestart.Enabled = !b;
         }
     }
 
@@ -1546,8 +1535,9 @@ namespace EndcordInstaller
         public ClientCard(DiscordClient client)
         {
             dc = client;
-            Height = 72; Margin = new Padding(0, 0, 0, 8);
-            Cursor = Cursors.Hand; DoubleBuffered = true;
+            Height = 64;
+            Cursor = Cursors.Hand;
+            DoubleBuffered = true;
             MouseEnter += (s, e) => { _hov = true; Invalidate(); };
             MouseLeave += (s, e) => { _hov = false; Invalidate(); };
             Click += (s, e) => { Selected = !_sel; };
@@ -1560,88 +1550,82 @@ namespace EndcordInstaller
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
             var r = new Rectangle(0, 0, Width - 1, Height - 1);
-
             Color bg = _sel ? C.CardSel : (_hov ? C.CardHov : C.Card);
             Gfx.FillRoundRect(g, r, 8, bg);
+            Gfx.DrawRoundRect(g, r, 8, _sel ? Color.FromArgb(90, C.Accent) : C.Border, 1f);
 
-            if (_sel)
-                Gfx.DrawRoundRect(g, r, 8, Color.FromArgb(140, C.Accent), 1.25f);
-            else if (_hov)
-                Gfx.DrawRoundRect(g, r, 8, Color.FromArgb(60, C.Accent), 1f);
-            else
-                Gfx.DrawRoundRect(g, r, 8, C.Border, 1f);
-
-            int cx = 24, cy = Height / 2;
+            int cx = 22;
+            int cy = Height / 2;
             var chkRect = new Rectangle(cx - 9, cy - 9, 18, 18);
             if (_sel)
             {
-                Gfx.FillRoundRect(g, chkRect, 5, C.Accent);
+                Gfx.FillRoundRect(g, chkRect, 4, C.Accent);
                 using (var p = new Pen(Color.White, 2f))
                 {
                     g.DrawLine(p, cx - 4, cy, cx - 1, cy + 3);
-                    g.DrawLine(p, cx - 1, cy + 3, cx + 4, cy - 3);
+                    g.DrawLine(p, cx - 1, cy + 3, cx + 5, cy - 4);
                 }
             }
             else
             {
-                Gfx.DrawRoundRect(g, chkRect, 5, _hov ? C.TextDim : C.TextDark, 1.5f);
+                Gfx.DrawRoundRect(g, chkRect, 4, _hov ? C.TextDim : C.TextDark, 1.5f);
             }
 
-            int tx = 52;
-            bool running = dc.IsRunning();
-
-            if (running)
-            {
-                using (var b = new SolidBrush(C.Green))
-                    g.FillEllipse(b, tx, (Height - 8) / 2, 8, 8);
-                tx += 14;
-            }
-
-            TextRenderer.DrawText(g, dc.Name, F.Title,
-                new Rectangle(tx, 8, Width - tx - 160, 20),
-                C.Text, TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
-
-            string info = dc.Version + (running ? "  ·  Running" : "  ·  Closed");
-            TextRenderer.DrawText(g, info, F.Subtitle,
-                new Rectangle(tx, 28, Width - 200, 18),
-                running ? C.Green : C.TextDim, TextFormatFlags.Left);
-
-            TextRenderer.DrawText(g, dc.ResourcesPath, F.MutedText,
-                new Rectangle(tx, 48, Width - 200, 14),
-                C.TextDim, TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
-
-            string editionStr = "CUSTOM";
-            Color edColor = C.TextDim;
-            Color edBgColor = Color.FromArgb(20, C.TextDim);
-            if (dc.Name.Contains("Stable")) { editionStr = "STABLE"; edColor = C.Blue; edBgColor = Color.FromArgb(25, C.Blue); }
-            else if (dc.Name.Contains("Canary")) { editionStr = "CANARY"; edColor = C.Amber; edBgColor = Color.FromArgb(25, C.Amber); }
-            else if (dc.Name.Contains("PTB")) { editionStr = "PTB"; edColor = C.Accent; edBgColor = Color.FromArgb(25, C.Accent); }
-            else if (dc.Name.Contains("Dev")) { editionStr = "DEV"; edColor = C.Red; edBgColor = Color.FromArgb(25, C.Red); }
-
-            var edSize = TextRenderer.MeasureText(editionStr, F.MutedText);
             bool injected = dc.IsInjected();
-            string statusStr = injected ? "ENDCORD PATCHED" : "VANILLA";
-            Color statusColor = injected ? C.Green : C.Amber;
-            Color statusBgColor = injected ? C.GreenBg : C.AmberBg;
-            var statusSize = TextRenderer.MeasureText(statusStr, F.MutedText);
+            bool running = dc.IsRunning();
+            string state = injected ? "已安裝" : "未安裝";
+            if (running) state += " · 執行中";
+            string title = dc.Name + "   " + dc.Version + "  ·  " + state;
+            int tx = 44;
+            TextRenderer.DrawText(g, title, F.Title,
+                new Rectangle(tx, 8, Width - tx - 12, 24),
+                C.Text, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter);
 
-            int margin = 16;
-            int badgeY = (Height - 22) / 2;
+            string path = dc.IsMacBundle ? dc.RootPath : dc.ResourcesPath;
+            TextRenderer.DrawText(g, path, F.MutedText,
+                new Rectangle(tx, 34, Width - tx - 12, 20),
+                C.TextDim, TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter);
+        }
+    }
 
-            int statusW = statusSize.Width + 14;
-            var statusRect = new Rectangle(Width - statusW - margin, badgeY, statusW, 22);
+    class PillButton : Control
+    {
+        readonly Color _fill;
+        bool _hov;
+        bool _down;
 
-            int edW = edSize.Width + 14;
-            var edRect = new Rectangle(statusRect.Left - edW - 8, badgeY, edW, 22);
+        public PillButton(string text, Color fill)
+        {
+            Text = text;
+            _fill = fill;
+            Font = F.ButtonText;
+            Height = 36;
+            Width = TextRenderer.MeasureText(text, Font).Width + 36;
+            Cursor = Cursors.Hand;
+            Margin = new Padding(0, 0, 8, 0);
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            MouseEnter += (s, e) => { _hov = true; Invalidate(); };
+            MouseLeave += (s, e) => { _hov = false; _down = false; Invalidate(); };
+            MouseDown += (s, e) => { _down = true; Invalidate(); };
+            MouseUp += (s, e) => { _down = false; Invalidate(); };
+        }
 
-            Gfx.FillRoundRect(g, edRect, 5, edBgColor);
-            Gfx.DrawRoundRect(g, edRect, 5, Color.FromArgb(70, edColor), 1f);
-            TextRenderer.DrawText(g, editionStr, F.MutedText, edRect, edColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        protected override void OnEnabledChanged(EventArgs e)
+        {
+            base.OnEnabledChanged(e);
+            Invalidate();
+        }
 
-            Gfx.FillRoundRect(g, statusRect, 5, statusBgColor);
-            Gfx.DrawRoundRect(g, statusRect, 5, Color.FromArgb(70, statusColor), 1f);
-            TextRenderer.DrawText(g, statusStr, F.MutedText, statusRect, statusColor,
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            var r = new Rectangle(0, 0, Width - 1, Height - 1);
+            Color fill = !Enabled ? C.Border : (_down ? ControlPaint.Dark(_fill) : (_hov ? ControlPaint.Light(_fill, 0.15f) : _fill));
+            Gfx.FillRoundRect(g, r, 8, fill);
+            TextRenderer.DrawText(g, Text, Font, r, Enabled ? Color.White : C.TextDark,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
     }
@@ -1786,7 +1770,7 @@ namespace EndcordInstaller
 
         public PathDialog()
         {
-            Text = "Custom Discord Path";
+            Text = "自訂 Discord 路徑";
             Size = new Size(480, 160);
             BackColor = C.Sidebar;
             ForeColor = C.Text;
@@ -1794,11 +1778,11 @@ namespace EndcordInstaller
             MaximizeBox = false; MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
 
-            var lbl = new Label { Text = "Select or paste path to Discord app folder:", Left = 20, Top = 16, AutoSize = true, Font = F.Subtitle, ForeColor = C.TextDim };
+            var lbl = new Label { Text = "貼上 Discord 的安裝資料夾：", Left = 20, Top = 16, AutoSize = true, Font = F.Subtitle, ForeColor = C.TextDim };
             txt = new TextBox { Left = 20, Top = 42, Width = 424, Font = F.Subtitle, BackColor = C.Bg, ForeColor = C.Text, BorderStyle = BorderStyle.FixedSingle };
 
-            var btnOk = new Button { Text = "Add", Left = 264, Top = 80, Width = 80, Height = 30, DialogResult = DialogResult.OK, BackColor = C.Accent, ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            var btnCancel = new Button { Text = "Cancel", Left = 364, Top = 80, Width = 80, Height = 30, DialogResult = DialogResult.Cancel, BackColor = C.Card, ForeColor = C.Text, FlatStyle = FlatStyle.Flat };
+            var btnOk = new Button { Text = "加入", Left = 264, Top = 80, Width = 80, Height = 30, DialogResult = DialogResult.OK, BackColor = C.Accent, ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+            var btnCancel = new Button { Text = "取消", Left = 364, Top = 80, Width = 80, Height = 30, DialogResult = DialogResult.Cancel, BackColor = C.Card, ForeColor = C.Text, FlatStyle = FlatStyle.Flat };
 
             btnOk.Click += (s, e) => SelectedPath = txt.Text;
 
