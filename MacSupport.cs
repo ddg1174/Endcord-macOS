@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -137,6 +138,7 @@ namespace EndcordInstaller
             try
             {
                 WriteAppAsar(appAsar, PatcherJsForAsar());
+                UpdateMacAsarIntegrity(resourcesDir);
             }
             catch
             {
@@ -192,6 +194,7 @@ namespace EndcordInstaller
 
             if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
             else if (File.Exists(tmp)) File.Delete(tmp);
+            UpdateMacAsarIntegrity(resourcesDir);
         }
 
         public static bool Resign(string appBundle)
@@ -305,11 +308,13 @@ namespace EndcordInstaller
         public static void WriteAppAsar(string outFile, string indexJs)
         {
             string packageJson = "{\n \"name\": \"discord\",\n \"main\": \"index.js\"\n}";
-            int indexLen = Encoding.UTF8.GetByteCount(indexJs);
-            int pkgLen = Encoding.UTF8.GetByteCount(packageJson);
-            string header = "{\"files\":{\"index.js\":{\"size\":" + indexLen
-                + ",\"offset\":\"0\"},\"package.json\":{\"size\":" + pkgLen
-                + ",\"offset\":\"" + indexLen + "\"}}}";
+            byte[] indexBytes = Encoding.UTF8.GetBytes(indexJs);
+            byte[] pkgBytes = Encoding.UTF8.GetBytes(packageJson);
+            string header = "{\"files\":{\"index.js\":{\"size\":" + indexBytes.Length
+                + ",\"offset\":\"0\",\"integrity\":" + IntegrityObject(indexBytes)
+                + "},\"package.json\":{\"size\":" + pkgBytes.Length
+                + ",\"offset\":\"" + indexBytes.Length + "\",\"integrity\":" + IntegrityObject(pkgBytes)
+                + "}}}";
 
             byte[] headerBytes = Encoding.UTF8.GetBytes(header);
             uint headerStringSize = (uint)headerBytes.Length;
@@ -329,9 +334,121 @@ namespace EndcordInstaller
                 bw.Write(headerBytes);
                 if (diff > 0)
                     bw.Write(Encoding.ASCII.GetBytes(new string('0', diff)));
-                bw.Write(Encoding.UTF8.GetBytes(indexJs));
-                bw.Write(Encoding.UTF8.GetBytes(packageJson));
+                bw.Write(indexBytes);
+                bw.Write(pkgBytes);
             }
+        }
+
+        // Discord on macOS checks this hash at startup. A replaced app.asar
+        // whose header hash is not in Info.plist is killed immediately.
+        public static void UpdateMacAsarIntegrity(string resourcesDir)
+        {
+            if (!IsMac() || string.IsNullOrEmpty(resourcesDir)) return;
+            var contents = Directory.GetParent(resourcesDir);
+            if (contents == null) return;
+            string plistPath = Path.Combine(contents.FullName, "Info.plist");
+            string asarPath = Path.Combine(resourcesDir, "app.asar");
+            if (!File.Exists(plistPath) || !File.Exists(asarPath)) return;
+
+            string hash = HeaderSha256(asarPath);
+            if (string.IsNullOrEmpty(hash)) return;
+
+            Run("/usr/bin/plutil", "-convert xml1 \"" + plistPath + "\"");
+            string text = File.ReadAllText(plistPath);
+            if (text.IndexOf("<plist", StringComparison.Ordinal) < 0)
+                return;
+            string updated = SetPlistIntegrityHash(text, hash);
+            if (updated != text)
+                File.WriteAllText(plistPath, updated, new UTF8Encoding(false));
+        }
+
+        public static string HeaderSha256(string asarPath)
+        {
+            string header = ReadAsarHeaderString(asarPath);
+            if (string.IsNullOrEmpty(header)) return null;
+            using (var sha = SHA256.Create())
+                return Hex(sha.ComputeHash(Encoding.UTF8.GetBytes(header)));
+        }
+
+        public static string SetPlistIntegrityHash(string plist, string hash)
+        {
+            if (string.IsNullOrEmpty(plist) || string.IsNullOrEmpty(hash)) return plist;
+            int key = plist.IndexOf("Resources/app.asar", StringComparison.Ordinal);
+            if (key >= 0)
+            {
+                int hashKey = plist.IndexOf("<key>hash</key>", key, StringComparison.Ordinal);
+                int start = hashKey >= 0 ? plist.IndexOf("<string>", hashKey, StringComparison.Ordinal) : -1;
+                int end = start >= 0 ? plist.IndexOf("</string>", start, StringComparison.Ordinal) : -1;
+                if (start >= 0 && end > start)
+                    return plist.Substring(0, start + "<string>".Length) + hash + plist.Substring(end);
+            }
+
+            string block =
+                "\t<key>ElectronAsarIntegrity</key>\n" +
+                "\t<dict>\n" +
+                "\t\t<key>Resources/app.asar</key>\n" +
+                "\t\t<dict>\n" +
+                "\t\t\t<key>algorithm</key>\n" +
+                "\t\t\t<string>SHA256</string>\n" +
+                "\t\t\t<key>hash</key>\n" +
+                "\t\t\t<string>" + hash + "</string>\n" +
+                "\t\t</dict>\n" +
+                "\t</dict>\n";
+            int close = plist.LastIndexOf("</dict>", StringComparison.Ordinal);
+            if (close < 0) return plist;
+            return plist.Substring(0, close) + block + plist.Substring(close);
+        }
+
+        static string ReadAsarHeaderString(string path)
+        {
+            using (var fs = File.OpenRead(path))
+            {
+                byte[] head = new byte[16];
+                if (fs.Read(head, 0, 16) != 16) return null;
+                int stringSize = BitConverter.ToInt32(head, 12);
+                if (stringSize <= 0 || stringSize > 32 * 1024 * 1024) return null;
+                byte[] body = new byte[stringSize];
+                if (fs.Read(body, 0, stringSize) != stringSize) return null;
+                return Encoding.UTF8.GetString(body);
+            }
+        }
+
+        static string IntegrityObject(byte[] content)
+        {
+            const int blockSize = 4194304;
+            var blocks = new List<string>();
+            using (var sha = SHA256.Create())
+            {
+                if (content.Length == 0)
+                    blocks.Add(Hex(sha.ComputeHash(Array.Empty<byte>())));
+                else
+                {
+                    for (int i = 0; i < content.Length; i += blockSize)
+                    {
+                        int n = Math.Min(blockSize, content.Length - i);
+                        blocks.Add(Hex(sha.ComputeHash(content, i, n)));
+                    }
+                }
+                string whole = Hex(sha.ComputeHash(content));
+                var sb = new StringBuilder();
+                sb.Append("{\"algorithm\":\"SHA256\",\"hash\":\"").Append(whole)
+                    .Append("\",\"blockSize\":").Append(blockSize).Append(",\"blocks\":[");
+                for (int i = 0; i < blocks.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    sb.Append('"').Append(blocks[i]).Append('"');
+                }
+                sb.Append("]}");
+                return sb.ToString();
+            }
+        }
+
+        static string Hex(byte[] hash)
+        {
+            var sb = new StringBuilder(hash.Length * 2);
+            foreach (byte b in hash)
+                sb.Append(b.ToString("x2"));
+            return sb.ToString();
         }
 
         static void RemoveOurAppFolder(string appDir)

@@ -118,6 +118,15 @@ namespace EndcordInstaller
             string body = Encoding.UTF8.GetString(patched, 8 + headerBufLen, patched.Length - (8 + headerBufLen));
             if (!header.Contains("\"index.js\"") || !header.Contains("\"package.json\""))
                 throw new Exception("asar header missing files");
+            if (!header.Contains("\"integrity\"") || !header.Contains("SHA256"))
+                throw new Exception("asar integrity metadata missing");
+            string headerHash = MacSupport.HeaderSha256(appAsar);
+            if (string.IsNullOrEmpty(headerHash) || headerHash.Length != 64)
+                throw new Exception("asar header hash missing");
+            string plist = "<plist><dict><key>ElectronAsarIntegrity</key><dict><key>Resources/app.asar</key><dict><key>hash</key><string>abc</string></dict></dict></dict></plist>";
+            string updatedPlist = MacSupport.SetPlistIntegrityHash(plist, headerHash);
+            if (!updatedPlist.Contains("<string>" + headerHash + "</string>") || updatedPlist.Contains(">abc<"))
+                throw new Exception("plist integrity hash was not replaced");
             if (!body.StartsWith("const {join}=require(\"path\");") || !body.Contains("\"Endcord\"") || !body.Contains("\"Application Support\""))
                 throw new Exception("asar payload missing");
             if (!body.Contains("\"main\": \"index.js\""))
