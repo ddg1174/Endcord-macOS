@@ -793,10 +793,10 @@ namespace EndcordInstaller
 
         void StartUninstall()
         {
-            RunTargets("正在移除...", targets => DoUninstall(targets), true);
+            RunTargets("正在移除...", targets => DoUninstall(targets), true, true);
         }
 
-        void RunTargets(string status, Action<List<DiscordClient>> work, bool canRelaunch)
+        void RunTargets(string status, Action<List<DiscordClient>> work, bool canRelaunch, bool skipRelaunchIfStillPatched = false)
         {
             var targets = SelectedClients();
             if (targets.Count == 0) { Log("請先勾選至少一個 Discord。", C.Amber); return; }
@@ -819,6 +819,11 @@ namespace EndcordInstaller
                     {
                         foreach (var c in targets)
                         {
+                            if (skipRelaunchIfStillPatched && c.IsInjected())
+                            {
+                                SafeLog("沒有重新開啟 " + c.Name + "。移除沒有完成，請先按「關閉 Discord」，確認完全關掉後再移除。", C.Amber);
+                                continue;
+                            }
                             SafeLog("正在重新開啟 " + c.Name + "...", C.Blue);
                             c.Launch();
                         }
@@ -947,49 +952,82 @@ namespace EndcordInstaller
             for (int i = 0; i < targets.Count; i++)
             {
                 var c = targets[i];
-                try
+                bool removed = false;
+                Exception last = null;
+                for (int attempt = 0; attempt < 3 && !removed; attempt++)
                 {
-                    ForceKillClient(c);
-                    Thread.Sleep(600);
-
-                    if (c.IsMacBundle)
+                    try
                     {
-                        MacSupport.Unpatch(c.ResourcesPath);
-                        if (MacSupport.Resign(c.RootPath))
-                            SafeLog("已從 " + c.Name + " 移除", C.Green);
-                        else
-                            SafeLog("已從 " + c.Name + " 移除，但 codesign 失敗。", C.Amber);
-                        SetProg(100 * (i + 1) / targets.Count);
-                        continue;
+                        ForceKillClient(c);
+                        c.Kill();
+                        Thread.Sleep(attempt == 0 ? 800 : 1500);
+                        UnpatchClient(c);
+                        removed = !c.IsInjected();
                     }
-
-                    var appDirs = Directory.GetDirectories(c.RootPath, "app-*");
-                    foreach (var appVerDir in appDirs)
+                    catch (Exception ex)
                     {
-                        string res = Path.Combine(appVerDir, "resources");
-                        if (!Directory.Exists(res))
-                        {
-                            MacSupport.RestoreLooseCore(appVerDir);
-                            continue;
-                        }
-                        if (MacSupport.IsPatched(res))
-                            MacSupport.Unpatch(res);
-                        else
-                            MacSupport.RestoreLooseCore(appVerDir);
+                        last = ex;
                     }
-                    SafeLog("已從 " + c.Name + " 移除", C.Green);
                 }
-                catch (Exception ex) { SafeLog(c.Name + " 移除失敗：" + ex.Message, C.Red); }
+
+                if (removed)
+                    SafeLog("已從 " + c.Name + " 移除", C.Green);
+                else if (last != null)
+                    SafeLog(c.Name + " 移除失敗：" + last.Message + "。請按「關閉 Discord」，確認完全關掉後再移除。", C.Red);
+                else
+                    SafeLog(c.Name + " 還在使用檔案，沒有移除成功。請按「關閉 Discord」，確認完全關掉後再移除。", C.Red);
                 SetProg(100 * (i + 1) / targets.Count);
             }
 
-            try
+            if (AnyClientStillPatched(targets))
+                SafeLog("還有 Discord 掛著 Endcord，所以先保留程式檔，避免開不起來。", C.Amber);
+            else
             {
-                if (Directory.Exists(DistPath)) SafeDeleteDir(DistPath);
+                try
+                {
+                    if (Directory.Exists(DistPath)) SafeDeleteDir(DistPath);
+                }
+                catch { }
             }
-            catch { }
 
             SafeLog("移除完成。", C.AccentLight);
+        }
+
+        void UnpatchClient(DiscordClient c)
+        {
+            if (c.IsMacBundle)
+            {
+                MacSupport.Unpatch(c.ResourcesPath);
+                if (!MacSupport.Resign(c.RootPath))
+                    SafeLog(string.IsNullOrEmpty(MacSupport.LastResignError)
+                        ? "已從 " + c.Name + " 移除，但 codesign 失敗。"
+                        : MacSupport.LastResignError, C.Amber);
+                return;
+            }
+
+            var appDirs = Directory.GetDirectories(c.RootPath, "app-*");
+            foreach (var appVerDir in appDirs)
+            {
+                string res = Path.Combine(appVerDir, "resources");
+                if (!Directory.Exists(res))
+                {
+                    MacSupport.RestoreLooseCore(appVerDir);
+                    continue;
+                }
+                if (MacSupport.IsPatched(res))
+                    MacSupport.Unpatch(res);
+                else
+                    MacSupport.RestoreLooseCore(appVerDir);
+            }
+        }
+
+        bool AnyClientStillPatched(List<DiscordClient> targets)
+        {
+            foreach (var c in clients)
+                if (c != null && c.IsInjected()) return true;
+            foreach (var c in targets)
+                if (c != null && c.IsInjected()) return true;
+            return false;
         }
 
         static void ForceKillClient(DiscordClient c)

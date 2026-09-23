@@ -277,23 +277,52 @@ namespace EndcordInstaller.Mac
             {
                 foreach (var client in targets)
                 {
-                    if (!string.IsNullOrEmpty(client.ExeName))
-                        MacSupport.KillProcessTree(client.ExeName);
-                    MacSupport.Unpatch(client.ResourcesPath);
-                    bool signed = MacSupport.Resign(client.RootPath);
-                    Log(signed
-                        ? "已從 " + client.Name + " 移除"
-                        : (string.IsNullOrEmpty(MacSupport.LastResignError)
-                            ? "已從 " + client.Name + " 移除，但 codesign 失敗。"
-                            : MacSupport.LastResignError));
+                    bool removed = false;
+                    Exception last = null;
+                    for (int attempt = 0; attempt < 3 && !removed; attempt++)
+                    {
+                        try
+                        {
+                            if (!string.IsNullOrEmpty(client.ExeName))
+                                MacSupport.KillProcessTree(client.ExeName);
+                            MacSupport.Unpatch(client.ResourcesPath);
+                            bool signed = MacSupport.Resign(client.RootPath);
+                            if (!signed)
+                                Log(string.IsNullOrEmpty(MacSupport.LastResignError)
+                                    ? "已從 " + client.Name + " 移除，但 codesign 失敗。"
+                                    : MacSupport.LastResignError);
+                            removed = !client.IsInjected();
+                        }
+                        catch (Exception ex)
+                        {
+                            last = ex;
+                        }
+                    }
+
+                    if (removed)
+                        Log("已從 " + client.Name + " 移除");
+                    else
+                        Log(client.Name + " 移除失敗：" + (last == null ? "檔案仍在使用中。" : last.Message) + " 請完全關掉 Discord 後再移除。");
                 }
-                try
+
+                bool stillPatched = false;
+                foreach (var client in targets)
+                    if (client.IsInjected()) stillPatched = true;
+                foreach (var client in MacSupport.FindApps())
+                    if (client.IsInjected()) stillPatched = true;
+
+                if (stillPatched)
+                    Log("還有 Discord 掛著 Endcord，所以先保留程式檔，避免開不起來。");
+                else
                 {
-                    string dist = MacSupport.GetDistPath();
-                    if (Directory.Exists(dist))
-                        Directory.Delete(dist, true);
+                    try
+                    {
+                        string dist = MacSupport.GetDistPath();
+                        if (Directory.Exists(dist))
+                            Directory.Delete(dist, true);
+                    }
+                    catch { }
                 }
-                catch { }
                 Log("移除完成。");
             });
         }
