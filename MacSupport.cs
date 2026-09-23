@@ -198,11 +198,26 @@ namespace EndcordInstaller
             UpdateMacAsarIntegrity(resourcesDir);
         }
 
+        public static string LastResignError;
+
         public static bool Resign(string appBundle)
         {
+            LastResignError = null;
             if (!IsMac() || string.IsNullOrEmpty(appBundle)) return true;
-            Run("xattr", "-cr \"" + appBundle + "\"");
-            return Run("codesign", "--force --deep --sign - \"" + appBundle + "\"") == 0;
+            Run("/usr/bin/xattr", "-cr \"" + appBundle + "\"");
+
+            string entitlements = RunCapture("/usr/bin/codesign", "-d --entitlements - \"" + appBundle + "\"");
+            bool hasRuntimeEntitlement = entitlements.IndexOf("allow-jit", StringComparison.Ordinal) >= 0
+                || entitlements.IndexOf("allow-unsigned-executable-memory", StringComparison.Ordinal) >= 0
+                || entitlements.IndexOf("disable-library-validation", StringComparison.Ordinal) >= 0;
+            if (!hasRuntimeEntitlement)
+            {
+                LastResignError = "Discord 的簽章已經壞了。請先到官網重新安裝 Discord，完全關掉後再按修復。";
+                return false;
+            }
+
+            DisableAsarIntegrityFuse(appBundle);
+            return Run("/usr/bin/codesign", "--force --sign - --preserve-metadata=entitlements,requirements,flags,runtime --deep \"" + appBundle + "\"") == 0;
         }
 
         public static string ReadVersion(string appBundle)
@@ -345,22 +360,47 @@ namespace EndcordInstaller
         public static void UpdateMacAsarIntegrity(string resourcesDir)
         {
             if (!IsMac() || string.IsNullOrEmpty(resourcesDir)) return;
+            string appAsar = Path.Combine(resourcesDir, "app.asar");
+            string backupAsar = Path.Combine(resourcesDir, "_app.asar");
+            if (!File.Exists(appAsar)) return;
+
+            string appHash = HeaderSha256(appAsar);
+            string backupHash = File.Exists(backupAsar) ? HeaderSha256(backupAsar) : null;
+            if (string.IsNullOrEmpty(appHash)) return;
+
+            foreach (string plistPath in InfoPlists(resourcesDir))
+            {
+                Run("/usr/bin/plutil", "-convert xml1 \"" + plistPath + "\"");
+                string text;
+                try { text = File.ReadAllText(plistPath); }
+                catch { continue; }
+                if (text.IndexOf("<plist", StringComparison.Ordinal) < 0 && text.IndexOf("ElectronAsarIntegrity", StringComparison.Ordinal) < 0)
+                    continue;
+
+                string updated = SetPlistIntegrityHash(text, "Resources/app.asar", appHash);
+                if (!string.IsNullOrEmpty(backupHash))
+                    updated = SetPlistIntegrityHash(updated, "Resources/_app.asar", backupHash);
+                if (updated != text)
+                    File.WriteAllText(plistPath, updated, new UTF8Encoding(false));
+            }
+        }
+
+        static IEnumerable<string> InfoPlists(string resourcesDir)
+        {
             var contents = Directory.GetParent(resourcesDir);
-            if (contents == null) return;
-            string plistPath = Path.Combine(contents.FullName, "Info.plist");
-            string asarPath = Path.Combine(resourcesDir, "app.asar");
-            if (!File.Exists(plistPath) || !File.Exists(asarPath)) return;
-
-            string hash = HeaderSha256(asarPath);
-            if (string.IsNullOrEmpty(hash)) return;
-
-            Run("/usr/bin/plutil", "-convert xml1 \"" + plistPath + "\"");
-            string text = File.ReadAllText(plistPath);
-            if (text.IndexOf("<plist", StringComparison.Ordinal) < 0)
-                return;
-            string updated = SetPlistIntegrityHash(text, hash);
-            if (updated != text)
-                File.WriteAllText(plistPath, updated, new UTF8Encoding(false));
+            if (contents == null) yield break;
+            var app = contents.Parent;
+            string main = Path.Combine(contents.FullName, "Info.plist");
+            if (File.Exists(main)) yield return main;
+            if (app == null || !Directory.Exists(app.FullName)) yield break;
+            string[] files;
+            try { files = Directory.GetFiles(app.FullName, "Info.plist", SearchOption.AllDirectories); }
+            catch { yield break; }
+            foreach (string file in files)
+            {
+                if (!string.Equals(file, main, StringComparison.OrdinalIgnoreCase))
+                    yield return file;
+            }
         }
 
         public static string HeaderSha256(string asarPath)
@@ -373,8 +413,16 @@ namespace EndcordInstaller
 
         public static string SetPlistIntegrityHash(string plist, string hash)
         {
-            if (string.IsNullOrEmpty(plist) || string.IsNullOrEmpty(hash)) return plist;
-            int key = plist.IndexOf("Resources/app.asar", StringComparison.Ordinal);
+            return SetPlistIntegrityHash(plist, "Resources/app.asar", hash);
+        }
+
+        public static string SetPlistIntegrityHash(string plist, string relativePath, string hash)
+        {
+            if (string.IsNullOrEmpty(plist) || string.IsNullOrEmpty(relativePath) || string.IsNullOrEmpty(hash))
+                return plist;
+
+            string keyTag = "<key>" + relativePath + "</key>";
+            int key = plist.IndexOf(keyTag, StringComparison.Ordinal);
             if (key >= 0)
             {
                 int hashKey = plist.IndexOf("<key>hash</key>", key, StringComparison.Ordinal);
@@ -384,20 +432,100 @@ namespace EndcordInstaller
                     return plist.Substring(0, start + "<string>".Length) + hash + plist.Substring(end);
             }
 
-            string block =
-                "\t<key>ElectronAsarIntegrity</key>\n" +
-                "\t<dict>\n" +
-                "\t\t<key>Resources/app.asar</key>\n" +
+            string entry =
+                "\n\t\t<key>" + relativePath + "</key>\n" +
                 "\t\t<dict>\n" +
                 "\t\t\t<key>algorithm</key>\n" +
                 "\t\t\t<string>SHA256</string>\n" +
                 "\t\t\t<key>hash</key>\n" +
                 "\t\t\t<string>" + hash + "</string>\n" +
-                "\t\t</dict>\n" +
+                "\t\t</dict>";
+            int integrityKey = plist.IndexOf("<key>ElectronAsarIntegrity</key>", StringComparison.Ordinal);
+            if (integrityKey >= 0)
+            {
+                int dict = plist.IndexOf("<dict>", integrityKey, StringComparison.Ordinal);
+                if (dict >= 0)
+                {
+                    int insertAt = dict + "<dict>".Length;
+                    return plist.Substring(0, insertAt) + entry + plist.Substring(insertAt);
+                }
+            }
+
+            string block =
+                "\t<key>ElectronAsarIntegrity</key>\n" +
+                "\t<dict>" + entry + "\n" +
                 "\t</dict>\n";
             int close = plist.LastIndexOf("</dict>", StringComparison.Ordinal);
             if (close < 0) return plist;
             return plist.Substring(0, close) + block + plist.Substring(close);
+        }
+
+        static void DisableAsarIntegrityFuse(string appBundle)
+        {
+            string framework = Path.Combine(appBundle, "Contents", "Frameworks", "Electron Framework.framework", "Electron Framework");
+            if (!File.Exists(framework)) return;
+
+            byte[] sentinel = Encoding.ASCII.GetBytes("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX");
+            byte[] data;
+            try { data = File.ReadAllBytes(framework); }
+            catch { return; }
+
+            bool changed = false;
+            int from = 0;
+            while (from < data.Length)
+            {
+                int at = IndexOfBytes(data, sentinel, from);
+                if (at < 0) break;
+                int wire = at + sentinel.Length;
+                if (wire + 2 < data.Length)
+                {
+                    int length = data[wire + 1];
+                    int fuse = wire + 2 + 4;
+                    if (length > 4 && fuse < data.Length && data[fuse] == (byte)'1')
+                    {
+                        data[fuse] = (byte)'0';
+                        changed = true;
+                    }
+                }
+                from = at + sentinel.Length;
+            }
+
+            if (!changed) return;
+            try { File.WriteAllBytes(framework, data); }
+            catch { }
+        }
+
+        static int IndexOfBytes(byte[] data, byte[] needle, int start)
+        {
+            for (int i = start; i <= data.Length - needle.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (data[i + j] != needle[j]) { match = false; break; }
+                }
+                if (match) return i;
+            }
+            return -1;
+        }
+
+        static string RunCapture(string file, string args)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(file, args);
+                psi.CreateNoWindow = true;
+                psi.UseShellExecute = false;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                var p = Process.Start(psi);
+                if (p == null) return "";
+                string stdout = p.StandardOutput.ReadToEnd();
+                string stderr = p.StandardError.ReadToEnd();
+                p.WaitForExit(30000);
+                return stdout + stderr;
+            }
+            catch { return ""; }
         }
 
         static string ReadAsarHeaderString(string path)

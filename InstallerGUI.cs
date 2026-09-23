@@ -406,8 +406,8 @@ namespace EndcordInstaller
         public static bool Resign(string appBundle)
         {
             if (!IsMac() || string.IsNullOrEmpty(appBundle)) return true;
-            Run("xattr", "-cr \"" + appBundle + "\"");
-            return Run("codesign", "--force --deep --sign - \"" + appBundle + "\"") == 0;
+            Run("/usr/bin/xattr", "-cr \"" + appBundle + "\"");
+            return Run("/usr/bin/codesign", "--force --sign - --preserve-metadata=entitlements,requirements,flags,runtime --deep \"" + appBundle + "\"") == 0;
         }
 
         public static string ReadVersion(string appBundle)

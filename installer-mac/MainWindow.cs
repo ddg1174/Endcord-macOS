@@ -256,7 +256,9 @@ namespace EndcordInstaller.Mac
                     bool signed = MacSupport.Resign(client.RootPath);
                     Log(signed
                         ? "已安裝到 " + client.Name
-                        : "已寫入 " + client.Name + "，但 codesign 失敗，macOS 可能不讓它開啟。");
+                        : (string.IsNullOrEmpty(MacSupport.LastResignError)
+                            ? "已寫入 " + client.Name + "，但 codesign 失敗，macOS 可能不讓它開啟。"
+                            : MacSupport.LastResignError));
                 }
                 Log(repair ? "修復完成。" : "安裝完成。");
             });
@@ -281,7 +283,9 @@ namespace EndcordInstaller.Mac
                     bool signed = MacSupport.Resign(client.RootPath);
                     Log(signed
                         ? "已從 " + client.Name + " 移除"
-                        : "已從 " + client.Name + " 移除，但 codesign 失敗。");
+                        : (string.IsNullOrEmpty(MacSupport.LastResignError)
+                            ? "已從 " + client.Name + " 移除，但 codesign 失敗。"
+                            : MacSupport.LastResignError));
                 }
                 try
                 {

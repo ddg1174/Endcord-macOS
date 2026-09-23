@@ -127,6 +127,9 @@ namespace EndcordInstaller
             string updatedPlist = MacSupport.SetPlistIntegrityHash(plist, headerHash);
             if (!updatedPlist.Contains("<string>" + headerHash + "</string>") || updatedPlist.Contains(">abc<"))
                 throw new Exception("plist integrity hash was not replaced");
+            string withBackup = MacSupport.SetPlistIntegrityHash(updatedPlist, "Resources/_app.asar", "0123456789abcdef");
+            if (!withBackup.Contains("<key>Resources/_app.asar</key>") || !withBackup.Contains(headerHash) || !withBackup.Contains("0123456789abcdef"))
+                throw new Exception("backup asar integrity hash was not added");
             if (!body.StartsWith("const {join}=require(\"path\");") || !body.Contains("\"Endcord\"") || !body.Contains("\"Application Support\""))
                 throw new Exception("asar payload missing");
             if (!body.Contains("\"main\": \"index.js\""))
