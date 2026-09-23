@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>EndcordInstaller</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>EndcordInstaller</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Installer.cs" />
+    <Compile Include="MacSupport.cs" />
+  </ItemGroup>
+</Project>
