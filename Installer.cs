@@ -295,19 +295,27 @@ namespace EndcordInstaller
             try
             {
                 Directory.CreateDirectory(EndcordDistPath);
-                string[] filesToExtract = new string[] {
-                    "patcher.js", "patcher.js.map",
-                    "preload.js", "preload.js.map",
-                    "renderer.js", "renderer.js.map",
-                    "renderer.css", "renderer.css.map"
-                };
-
-                Console.WriteLine("\n[1/2] Endcord dosyaları çıkartılıyor...");
-                foreach (var file in filesToExtract)
+                if (MacSupport.TryUpdateDistFromGitHub(EndcordDistPath, Console.WriteLine))
                 {
-                    string dest = Path.Combine(EndcordDistPath, file);
-                    ExtractResource(file, dest);
-                    Console.WriteLine("Çıkartıldı: " + file);
+                    Console.WriteLine("\n[1/2] Latest Endcord downloaded from GitHub.");
+                }
+                else
+                {
+                    Console.WriteLine("\n[1/2] Endcord dosyaları çıkartılıyor...");
+                    foreach (var file in MacSupport.DistFileNames)
+                    {
+                        string dest = Path.Combine(EndcordDistPath, file);
+                        try
+                        {
+                            ExtractResource(file, dest);
+                            Console.WriteLine("Çıkartıldı: " + file);
+                        }
+                        catch (Exception)
+                        {
+                            if (file == "version.json" || file.EndsWith(".map")) continue;
+                            throw;
+                        }
+                    }
                 }
             }
             catch (Exception ex)

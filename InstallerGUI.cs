@@ -9,6 +9,7 @@ using System.Drawing.Text;
 using System.Windows.Forms;
 using System.Threading;
 using System.Runtime.InteropServices;
+using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -593,6 +594,68 @@ namespace EndcordInstaller
                 return p.ExitCode;
             }
             catch { return -1; }
+        }
+
+        public static bool TryUpdateDistFromGitHub(string destDir, Action<string> log)
+        {
+            if (string.IsNullOrEmpty(destDir)) return false;
+            try
+            {
+                Directory.CreateDirectory(destDir);
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(45);
+                    http.DefaultRequestHeaders.UserAgent.ParseAdd("EndcordInstaller");
+                    string meta = http.GetStringAsync("https://api.github.com/repos/ddg1174/Endcord-macOS/commits/main")
+                        .ConfigureAwait(false).GetAwaiter().GetResult();
+                    var shaMatch = Regex.Match(meta, "\"sha\"\\s*:\\s*\"([0-9a-f]{40})\"");
+                    if (!shaMatch.Success) return false;
+                    string sha = shaMatch.Groups[1].Value;
+                    string[] names = {
+                        "version.json",
+                        "patcher.js", "patcher.js.map",
+                        "preload.js", "preload.js.map",
+                        "renderer.js", "renderer.js.map",
+                        "renderer.css", "renderer.css.map"
+                    };
+                    var downloaded = new List<KeyValuePair<string, byte[]>>();
+                    foreach (string name in names)
+                    {
+                        var response = http.GetAsync("https://raw.githubusercontent.com/ddg1174/Endcord-macOS/" + sha + "/publish/dist/" + name)
+                            .ConfigureAwait(false).GetAwaiter().GetResult();
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            if (name.EndsWith(".map") || name == "version.json") continue;
+                            return false;
+                        }
+                        byte[] bytes = response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                        string head = Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, 120)).TrimStart().ToLowerInvariant();
+                        bool bad = bytes.Length < 16 || head.StartsWith("<!") || head.StartsWith("<html");
+                        if (name.EndsWith(".js") && (bad || bytes.Length < 500 || !Encoding.UTF8.GetString(bytes).Contains("Endcord")))
+                            return false;
+                        if ((name == "version.json" || name.EndsWith(".map")) && (bad || !head.StartsWith("{")))
+                            continue;
+                        downloaded.Add(new KeyValuePair<string, byte[]>(name, bytes));
+                    }
+
+                    bool hasPatcher = false;
+                    foreach (var item in downloaded)
+                        if (item.Key == "patcher.js") hasPatcher = true;
+                    if (!hasPatcher) return false;
+
+                    foreach (var item in downloaded)
+                    {
+                        string dest = Path.Combine(destDir, item.Key);
+                        string tmp = dest + ".download";
+                        File.WriteAllBytes(tmp, item.Value);
+                        if (File.Exists(dest)) File.Delete(dest);
+                        File.Move(tmp, dest);
+                    }
+                }
+                if (log != null) log("已從 GitHub 下載最新版。");
+                return true;
+            }
+            catch { return false; }
         }
     }
 
@@ -1244,15 +1307,31 @@ namespace EndcordInstaller
             try
             {
                 Directory.CreateDirectory(DistPath);
-                string[] files = { "patcher.js","patcher.js.map","preload.js","preload.js.map",
-                                   "renderer.js","renderer.js.map","renderer.css","renderer.css.map" };
-                SafeLog("正在複製 Endcord 檔案...", C.TextDim);
-                for (int i = 0; i < files.Length; i++)
+                if (MacSupport.TryUpdateDistFromGitHub(DistPath, message => SafeLog(message, C.AccentLight)))
                 {
-                    string dest = Path.Combine(DistPath, files[i]);
-                    SafeDeleteFile(dest);
-                    ExtractRes(files[i], dest);
-                    SetProg(5 + 40 * (i + 1) / files.Length);
+                    SetProg(45);
+                }
+                else
+                {
+                    SafeLog("無法連上 GitHub，改用安裝程式裡的版本。", C.TextDim);
+                    string[] files = { "version.json", "patcher.js","patcher.js.map","preload.js","preload.js.map",
+                                       "renderer.js","renderer.js.map","renderer.css","renderer.css.map" };
+                    SafeLog("正在複製 Endcord 檔案...", C.TextDim);
+                    for (int i = 0; i < files.Length; i++)
+                    {
+                        string dest = Path.Combine(DistPath, files[i]);
+                        try
+                        {
+                            SafeDeleteFile(dest);
+                            ExtractRes(files[i], dest);
+                        }
+                        catch (Exception)
+                        {
+                            if (files[i] == "version.json" || files[i].EndsWith(".map")) continue;
+                            throw;
+                        }
+                        SetProg(5 + 40 * (i + 1) / files.Length);
+                    }
                 }
             }
             catch (Exception ex) { SafeLog("複製失敗：" + ex.Message, C.Red); return; }

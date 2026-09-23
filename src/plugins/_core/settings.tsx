@@ -178,8 +178,8 @@ export default definePlugin({
             }),
             !IS_UPDATER_DISABLED && UpdaterTab && buildEntry({
                 key: "endcord_updater",
-                title: "Updater",
-                panelTitle: "Endcord Updater",
+                title: "更新",
+                panelTitle: "Endcord 更新",
                 Component: UpdaterTab,
                 Icon: UpdaterIcon
             }),

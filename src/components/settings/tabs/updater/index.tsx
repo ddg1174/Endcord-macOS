@@ -70,14 +70,14 @@ function Updater() {
             <VesktopSection />
 
             <FormSwitch
-                title="Automatically update"
-                description="Automatically update Endcord without confirmation prompt"
+                title="自動更新"
+                description="有新版本時直接從 GitHub 下載，不用再重新安裝"
                 value={settings.autoUpdate}
                 onChange={(v: boolean) => settings.autoUpdate = v}
             />
             <FormSwitch
-                title="Get notified when an automatic update completes"
-                description="Show a notification when Endcord automatically updates"
+                title="更新完成後通知我"
+                description="自動更新完成後顯示通知，點一下重新開啟 Discord"
                 value={settings.autoUpdateNotification}
                 onChange={(v: boolean) => settings.autoUpdateNotification = v}
                 disabled={!settings.autoUpdate}

@@ -78,14 +78,14 @@ export function Updatable(props: CommonProps) {
         <>
             {!updates && updateError ? (
                 <>
-                    <Forms.FormText>Failed to check updates. Check the console for more info</Forms.FormText>
+                    <Forms.FormText>無法檢查更新。詳細原因在主控台。</Forms.FormText>
                     <ErrorCard style={{ padding: "1em" }}>
                         <p>{updateError.stderr || updateError.stdout || "An unknown error occurred"}</p>
                     </ErrorCard>
                 </>
             ) : (
                 <Forms.FormText className={Margins.bottom8}>
-                    {isOutdated ? (updates.length === 1 ? "There is 1 Update" : `There are ${updates.length} Updates`) : "Up to Date!"}
+                    {isOutdated ? (updates.length === 1 ? "有 1 個更新" : `有 ${updates.length} 個更新`) : "已是最新版本"}
                 </Forms.FormText>
             )}
 
@@ -103,10 +103,10 @@ export function Updatable(props: CommonProps) {
                                     openModal(props => (
                                         <ConfirmModal
                                             {...props}
-                                            title="Update Success!"
-                                            subtitle="Successfully updated. Restart now to apply the changes?"
-                                            confirmText="Restart"
-                                            cancelText="Not now!"
+                                            title="更新完成"
+                                            subtitle="要現在重新開啟 Discord 嗎？"
+                                            confirmText="重新開啟"
+                                            cancelText="稍後"
                                             variant="primary"
                                             onConfirm={() => {
                                                 relaunch();
@@ -119,7 +119,7 @@ export function Updatable(props: CommonProps) {
                             }
                         })}
                     >
-                        Update Now
+                        立即更新
                     </Button>
                 )}
                 <Button
@@ -133,7 +133,7 @@ export function Updatable(props: CommonProps) {
                             setUpdates([]);
 
                             Toasts.show({
-                                message: "No updates found!",
+                                message: "沒有新版本",
                                 id: Toasts.genId(),
                                 type: Toasts.Type.MESSAGE,
                                 options: {
@@ -143,7 +143,7 @@ export function Updatable(props: CommonProps) {
                         }
                     })}
                 >
-                    Check for Updates
+                    檢查更新
                 </Button>
             </Flex>
         </>

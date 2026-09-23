@@ -8,77 +8,154 @@ import { fetchBuffer, fetchJson } from "@main/utils/http";
 import { ENDCORD_USER_AGENT } from "@shared/endcordUserAgent";
 import { IpcEvents } from "@shared/IpcEvents";
 import { ipcMain } from "electron";
-import { writeFile } from "fs/promises";
+import { readFileSync } from "fs";
+import { rename, rm, writeFile } from "fs/promises";
 import { join } from "path";
 
 import gitHash from "~git-hash";
 import gitRemote from "~git-remote";
 
-import { ENDCORD_FILES,serializeErrors } from "./common";
+import { serializeErrors } from "./common";
 
 const API_BASE = `https://api.github.com/repos/${gitRemote}`;
-let PendingUpdates = [] as [string, string][];
+const DIST_FILES = [
+    "patcher.js",
+    "patcher.js.map",
+    "preload.js",
+    "preload.js.map",
+    "renderer.js",
+    "renderer.js.map",
+    "renderer.css",
+    "renderer.css.map"
+];
+
+const githubHeaders = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": ENDCORD_USER_AGENT
+};
+
+let pendingVersion: string | null = null;
+
+function readLocalVersion() {
+    try {
+        const parsed = JSON.parse(readFileSync(join(__dirname, "version.json"), "utf8"));
+        if (typeof parsed?.version === "string" && parsed.version)
+            return parsed.version;
+    } catch { }
+    return gitHash;
+}
 
 async function githubGet<T = any>(endpoint: string) {
-    return fetchJson<T>(API_BASE + endpoint, {
+    return fetchJson<T>(API_BASE + endpoint, { headers: githubHeaders });
+}
+
+async function latestCommitSha() {
+    const data = await githubGet<{ sha?: string }>("/commits/main");
+    if (!data?.sha)
+        throw new Error("GitHub 沒有回傳最新版本");
+    return data.sha;
+}
+
+function rawUrl(sha: string, name: string) {
+    return `https://raw.githubusercontent.com/${gitRemote}/${sha}/publish/dist/${name}`;
+}
+
+async function fetchRemoteVersion(sha: string) {
+    const data = await fetchJson<{ version?: string }>(rawUrl(sha, "version.json"), {
         headers: {
-            Accept: "application/vnd.github+json",
-            // "All API requests MUST include a valid User-Agent header.
-            // Requests with no User-Agent header will be rejected."
+            Accept: "application/json",
             "User-Agent": ENDCORD_USER_AGENT
         }
     });
+    if (!data?.version)
+        throw new Error("GitHub 上的 version.json 沒有版本號碼");
+    return data.version;
+}
+
+function looksValid(name: string, body: Buffer) {
+    if (body.length < 16) return false;
+    const head = body.subarray(0, 120).toString("utf8").trimStart().toLowerCase();
+    if (head.startsWith("<!") || head.startsWith("<html") || head.startsWith("not found"))
+        return false;
+    if (name === "version.json" || name.endsWith(".map"))
+        return head.startsWith("{");
+    if (name.endsWith(".js"))
+        return body.length > 500 && body.includes(Buffer.from("Endcord"));
+    return true;
 }
 
 async function calculateGitChanges() {
-    const isOutdated = await fetchUpdates();
-    if (!isOutdated) return [];
+    const sha = await latestCommitSha();
+    const remoteVersion = await fetchRemoteVersion(sha);
+    if (remoteVersion === readLocalVersion()) {
+        pendingVersion = null;
+        return [];
+    }
+
+    pendingVersion = remoteVersion;
 
     try {
-        const data = await githubGet(`/compare/${gitHash}...HEAD`);
-
-        return data.commits.map((c: any) => ({
-            // github api only sends the long sha
-            hash: c.sha.slice(0, 7),
-            author: c.author?.login ?? c.commit?.author?.name ?? "Unknown Author",
-            message: c.commit.message.split("\n")[0]
+        const commits = await githubGet<any[]>(`/commits?sha=${sha}&per_page=8`);
+        return commits.map(c => ({
+            hash: String(c.sha ?? remoteVersion).slice(0, 7),
+            author: c.author?.login ?? c.commit?.author?.name ?? "GitHub",
+            message: String(c.commit?.message ?? "GitHub 上有新版本").split("\n")[0]
         }));
     } catch {
         return [{
-            hash: "new",
+            hash: remoteVersion,
             author: "GitHub",
-            message: "New update available on GitHub"
+            message: "GitHub 上有新版本"
         }];
     }
 }
 
 async function fetchUpdates() {
-    const data = await githubGet("/releases/latest");
-
-    const hash = data.name.slice(data.name.lastIndexOf(" ") + 1);
-    if (hash === gitHash)
-        return false;
-
-    data.assets.forEach(({ name, browser_download_url }) => {
-        if (ENDCORD_FILES.some(s => name.startsWith(s))) {
-            PendingUpdates.push([name, browser_download_url]);
-        }
-    });
-
-    return true;
+    if (pendingVersion) return true;
+    const changes = await calculateGitChanges();
+    return changes.length > 0;
 }
 
 async function applyUpdates() {
-    const fileContents = await Promise.all(PendingUpdates.map(async ([name, url]) => {
-        const contents = await fetchBuffer(url);
-        return [join(__dirname, name), contents] as const;
-    }));
+    const sha = await latestCommitSha();
+    const remoteVersion = await fetchRemoteVersion(sha);
+    if (remoteVersion === readLocalVersion()) {
+        pendingVersion = null;
+        return true;
+    }
 
-    await Promise.all(fileContents.map(async ([filename, contents]) =>
-        writeFile(filename, contents))
-    );
+    const names = ["version.json", ...DIST_FILES];
+    const staged: [string, string][] = [];
 
-    PendingUpdates = [];
+    try {
+        for (const name of names) {
+            let body: Buffer;
+            try {
+                body = await fetchBuffer(rawUrl(sha, name), { headers: githubHeaders });
+            } catch (err) {
+                if (name.endsWith(".map")) continue;
+                throw err;
+            }
+
+            if (!looksValid(name, body))
+                throw new Error("從 GitHub 下載的檔案不正確：" + name);
+
+            const dest = join(__dirname, name);
+            const tmp = dest + ".download";
+            await writeFile(tmp, body);
+            staged.push([tmp, dest]);
+        }
+
+        for (const [tmp, dest] of staged) {
+            await rm(dest, { force: true });
+            await rename(tmp, dest);
+        }
+    } catch (err) {
+        await Promise.all(staged.map(([tmp]) => rm(tmp, { force: true })));
+        throw err;
+    }
+
+    pendingVersion = null;
     return true;
 }
 

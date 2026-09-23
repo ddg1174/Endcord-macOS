@@ -113,8 +113,8 @@ async function runUpdateCheck() {
             await update();
             if (Settings.autoUpdateNotification) {
                 notify({
-                    title: "Endcord has been updated!",
-                    body: "Click here to restart",
+                    title: "Endcord 已更新",
+                    body: "點這裡重新開啟 Discord",
                     onClick: relaunch
                 });
             }
@@ -122,8 +122,8 @@ async function runUpdateCheck() {
         }
 
         notify({
-            title: "A Endcord update is available!",
-            body: "Click here to view the update",
+            title: "Endcord 有新版本",
+            body: "點這裡查看更新",
             onClick: () => openSettingsTabModal(UpdaterTab!)
         });
     } catch (err) {

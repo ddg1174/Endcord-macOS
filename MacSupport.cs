@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -502,6 +503,92 @@ namespace EndcordInstaller
                 return p.ExitCode;
             }
             catch { return -1; }
+        }
+
+        public const string GitHubRepo = "ddg1174/Endcord-macOS";
+
+        public static readonly string[] DistFileNames = {
+            "version.json",
+            "patcher.js", "patcher.js.map",
+            "preload.js", "preload.js.map",
+            "renderer.js", "renderer.js.map",
+            "renderer.css", "renderer.css.map"
+        };
+
+        public static bool TryUpdateDistFromGitHub(string destDir, Action<string> log)
+        {
+            if (string.IsNullOrEmpty(destDir)) return false;
+            try
+            {
+                Directory.CreateDirectory(destDir);
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(45);
+                    http.DefaultRequestHeaders.UserAgent.ParseAdd("EndcordInstaller");
+                    string meta = HttpGet(http, "https://api.github.com/repos/" + GitHubRepo + "/commits/main");
+                    var shaMatch = Regex.Match(meta, "\"sha\"\\s*:\\s*\"([0-9a-f]{40})\"");
+                    if (!shaMatch.Success) return false;
+                    string sha = shaMatch.Groups[1].Value;
+
+                    var downloaded = new List<KeyValuePair<string, byte[]>>();
+                    foreach (string name in DistFileNames)
+                    {
+                        var response = http.GetAsync("https://raw.githubusercontent.com/" + GitHubRepo + "/" + sha + "/publish/dist/" + name)
+                            .ConfigureAwait(false).GetAwaiter().GetResult();
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            if (name.EndsWith(".map") || name == "version.json") continue;
+                            return false;
+                        }
+                        byte[] bytes = response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                        if (!DistBytesLookValid(name, bytes))
+                        {
+                            if (name.EndsWith(".map") || name == "version.json") continue;
+                            return false;
+                        }
+                        downloaded.Add(new KeyValuePair<string, byte[]>(name, bytes));
+                    }
+
+                    bool hasPatcher = false;
+                    foreach (var item in downloaded)
+                        if (item.Key == "patcher.js") hasPatcher = true;
+                    if (!hasPatcher) return false;
+
+                    foreach (var item in downloaded)
+                    {
+                        string dest = Path.Combine(destDir, item.Key);
+                        string tmp = dest + ".download";
+                        File.WriteAllBytes(tmp, item.Value);
+                        if (File.Exists(dest)) File.Delete(dest);
+                        File.Move(tmp, dest);
+                    }
+                }
+
+                if (log != null) log("已從 GitHub 下載最新版。");
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        static string HttpGet(HttpClient http, string url)
+        {
+            return http.GetStringAsync(url).ConfigureAwait(false).GetAwaiter().GetResult();
+        }
+
+        static bool DistBytesLookValid(string name, byte[] bytes)
+        {
+            if (bytes == null || bytes.Length < 16) return false;
+            string head = Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, 120)).TrimStart().ToLowerInvariant();
+            if (head.StartsWith("<!") || head.StartsWith("<html") || head.StartsWith("not found"))
+                return false;
+            if (name == "version.json" || name.EndsWith(".map"))
+                return head.StartsWith("{");
+            if (name.EndsWith(".js"))
+                return bytes.Length > 500 && Encoding.UTF8.GetString(bytes).Contains("Endcord");
+            return true;
         }
     }
 

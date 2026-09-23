@@ -47,7 +47,9 @@ export async function update() {
     if (res) {
         isOutdated = false;
         if (!await Unwrap(EndcordNative.updater.rebuild()))
-            throw new Error("The Build failed. Please try manually building the new update");
+            throw new Error(IS_STANDALONE
+                ? "下載更新失敗。請稍後再試，或用安裝程式重裝。"
+                : "The Build failed. Please try manually building the new update");
     }
 
     return res;

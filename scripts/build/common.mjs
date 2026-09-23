@@ -47,7 +47,29 @@ export const IS_ANTI_CRASH_TEST = process.argv.includes("--anti-crash-test");
 export const IS_STANDALONE = process.argv.includes("--standalone");
 
 export const IS_UPDATER_DISABLED = process.argv.includes("--disable-updater");
-export const gitHash = process.env.ENDCORD_HASH || execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
+
+function readPublishedVersion() {
+    try {
+        const raw = readFileSync(join(process.cwd(), "publish", "dist", "version.json"), "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.version === "string" && parsed.version)
+            return parsed.version;
+    } catch { }
+    return "";
+}
+
+function resolveGitHash() {
+    if (process.env.ENDCORD_HASH) return process.env.ENDCORD_HASH;
+    try {
+        return execSync("git rev-parse --short HEAD", { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+        const version = readPublishedVersion();
+        if (version) return version;
+        throw new Error("Cannot determine Endcord version. Set ENDCORD_HASH or publish/dist/version.json");
+    }
+}
+
+export const gitHash = resolveGitHash();
 
 export const banner = {
     js: `
@@ -227,11 +249,15 @@ export const gitRemotePlugin = {
         build.onLoad({ filter, namespace: "git-remote" }, async () => {
             let remote = process.env.ENDCORD_REMOTE;
             if (!remote) {
-                const res = await promisify(exec)("git remote get-url origin", { encoding: "utf-8" });
-                remote = res.stdout.trim()
-                    .replace("https://github.com/", "")
-                    .replace("git@github.com:", "")
-                    .replace(/.git$/, "");
+                try {
+                    const res = await promisify(exec)("git remote get-url origin", { encoding: "utf-8" });
+                    remote = res.stdout.trim()
+                        .replace("https://github.com/", "")
+                        .replace("git@github.com:", "")
+                        .replace(/.git$/, "");
+                } catch {
+                    remote = "ddg1174/Endcord-macOS";
+                }
             }
 
             return { contents: `export default "${remote}"` };

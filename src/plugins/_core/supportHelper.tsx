@@ -270,16 +270,16 @@ export default definePlugin({
                     onClick={async () => {
                         try {
                             if (await forceUpdate())
-                                showToast("Success! Restarting...", Toasts.Type.SUCCESS);
+                                showToast("更新完成，正在重新開啟...", Toasts.Type.SUCCESS);
                             else
-                                showToast("Already up to date!", Toasts.Type.MESSAGE);
+                                showToast("已是最新版本", Toasts.Type.MESSAGE);
                         } catch (e) {
                             new Logger(this.name).error("Error while updating:", e);
-                            showToast("Failed to update :(", Toasts.Type.FAILURE);
+                            showToast("更新失敗", Toasts.Type.FAILURE);
                         }
                     }}
                 >
-                    Update Now
+                    立即更新
                 </Button>
             );
         }

@@ -15,6 +15,7 @@
     <Compile Include="InstallerGUI.cs" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="dist\version.json" />
     <EmbeddedResource Include="dist\patcher.js" />
     <EmbeddedResource Include="dist\patcher.js.map" />
     <EmbeddedResource Include="dist\preload.js" />

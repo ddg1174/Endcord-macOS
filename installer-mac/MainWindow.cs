@@ -13,12 +13,7 @@ namespace EndcordInstaller.Mac
 {
     class MainWindow : Window
     {
-        static readonly string[] DistFiles = {
-            "patcher.js", "patcher.js.map",
-            "preload.js", "preload.js.map",
-            "renderer.js", "renderer.js.map",
-            "renderer.css", "renderer.css.map"
-        };
+        static readonly string[] DistFiles = MacSupport.DistFileNames;
 
         readonly StackPanel _clientList = new StackPanel { Spacing = 8 };
         readonly TextBox _log = new TextBox
@@ -338,11 +333,18 @@ namespace EndcordInstaller.Mac
         {
             string destDir = MacSupport.GetDistPath();
             Directory.CreateDirectory(destDir);
+            if (MacSupport.TryUpdateDistFromGitHub(destDir, Log))
+                return;
+
+            Log("無法連上 GitHub，改用安裝程式裡的版本。");
             foreach (var name in DistFiles)
             {
                 string source = FindDistFile(name);
                 if (source == null)
+                {
+                    if (name == "version.json" || name.EndsWith(".map")) continue;
                     throw new Exception("找不到 " + name + "。請把 Endcord 建置出的 dist 資料夾放在這個 App 旁邊。");
+                }
                 File.Copy(source, Path.Combine(destDir, name), true);
                 Log("已複製 " + name);
             }
