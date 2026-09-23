@@ -13,6 +13,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="InstallerGUI.cs" />
+    <Compile Include="MacSupport.cs" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="dist\version.json" />

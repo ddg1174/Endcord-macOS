@@ -790,7 +790,7 @@ namespace EndcordInstaller
         }
     }
 
-    public class DiscordClient
+    public partial class DiscordClient
     {
         public string Name { get; set; }
         public string RootPath { get; set; }
@@ -801,8 +801,27 @@ namespace EndcordInstaller
         public string VersionLabel { get; set; }
         public bool IsInjected()
         {
-            if (IsMacBundle || !string.IsNullOrEmpty(ResourcesPath))
-                return MacSupport.IsPatched(ResourcesPath);
+            try
+            {
+                if (IsMacBundle)
+                    return MacSupport.IsPatched(ResourcesPath);
+                if (string.IsNullOrEmpty(RootPath) || !Directory.Exists(RootPath)) return false;
+                foreach (var appVerDir in Directory.GetDirectories(RootPath, "app-*"))
+                {
+                    string res = Path.Combine(appVerDir, "resources");
+                    if (MacSupport.IsPatched(res)) return true;
+
+                    string modulesDir = Path.Combine(appVerDir, "modules");
+                    if (!Directory.Exists(modulesDir)) continue;
+                    foreach (string dir in Directory.GetDirectories(modulesDir, "discord_desktop_core-*"))
+                    {
+                        string indexJs = Path.Combine(dir, "discord_desktop_core", "index.js");
+                        if (File.Exists(indexJs) && File.ReadAllText(indexJs).Contains("Endcord"))
+                            return true;
+                    }
+                }
+            }
+            catch { }
             return false;
         }
     }

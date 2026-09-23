@@ -5,8 +5,8 @@
  */
 
 import { definePluginSettings } from "@api/Settings";
-import { BackupRestoreIcon, MainSettingsIcon, PaintbrushIcon, PatchHelperIcon, PlaceholderIcon, PluginsIcon, UpdaterIcon, VesktopSettingsIcon } from "@components/Icons";
-import { BackupAndRestoreTab, EndcordTab,PatchHelperTab, PluginsTab, ThemesTab, UpdaterTab } from "@components/settings/tabs";
+import { BackupRestoreIcon, MainSettingsIcon, PaintbrushIcon, PatchHelperIcon, PlaceholderIcon, PluginsIcon, PrivacyIcon, UpdaterIcon, VesktopSettingsIcon } from "@components/Icons";
+import { BackupAndRestoreTab, EndcordTab, PatchHelperTab, PluginsTab, PrivacyTab, ThemesTab, UpdaterTab } from "@components/settings/tabs";
 import { Devs } from "@utils/constants";
 import { isTruthy } from "@utils/guards";
 import definePlugin, { IconProps, OptionType } from "@utils/types";
@@ -163,6 +163,13 @@ export default definePlugin({
                 panelTitle: "Endcord Settings",
                 Component: EndcordTab,
                 Icon: MainSettingsIcon
+            }),
+            buildEntry({
+                key: "endcord_privacy",
+                title: "隱私",
+                panelTitle: "隱私",
+                Component: PrivacyTab,
+                Icon: PrivacyIcon
             }),
             buildEntry({
                 key: "endcord_plugins",

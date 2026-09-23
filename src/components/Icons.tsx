@@ -614,6 +614,20 @@ export function DownArrow(props: IconProps) {
     );
 }
 
+export function PrivacyIcon(props: IconProps) {
+    return (
+        <Icon
+            {...props}
+            viewBox="0 0 24 24"
+        >
+            <path
+                fill={props.fill || "currentColor"}
+                d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4Z"
+            />
+        </Icon>
+    );
+}
+
 export function RightArrow(props: IconProps) {
     return (
         <Icon
