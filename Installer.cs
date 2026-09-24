@@ -338,12 +338,13 @@ namespace EndcordInstaller
                     {
                         if (!string.IsNullOrEmpty(client.ExeName))
                             MacSupport.KillProcessTree(client.ExeName);
-                        MacSupport.Patch(client.ResourcesPath);
-                        bool signed = MacSupport.Resign(client.RootPath);
+                        bool signed = MacSupport.ApplyMacPatch(client.ResourcesPath, client.RootPath);
                         Console.ForegroundColor = signed ? ConsoleColor.Green : ConsoleColor.Yellow;
                         Console.WriteLine(signed
                             ? "Başarıyla kuruldu/onarıldı: " + client.Name
-                            : "Kuruldu ama codesign başarısız: " + client.Name);
+                            : (string.IsNullOrEmpty(MacSupport.LastResignError)
+                                ? "Kurulum geri alındı: " + client.Name
+                                : MacSupport.LastResignError));
                         Console.ResetColor();
                         continue;
                     }

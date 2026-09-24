@@ -252,12 +252,11 @@ namespace EndcordInstaller.Mac
                 {
                     if (!string.IsNullOrEmpty(client.ExeName))
                         MacSupport.KillProcessTree(client.ExeName);
-                    MacSupport.Patch(client.ResourcesPath);
-                    bool signed = MacSupport.Resign(client.RootPath);
+                    bool signed = MacSupport.ApplyMacPatch(client.ResourcesPath, client.RootPath);
                     Log(signed
                         ? "已安裝到 " + client.Name
                         : (string.IsNullOrEmpty(MacSupport.LastResignError)
-                            ? "已寫入 " + client.Name + "，但 codesign 失敗，macOS 可能不讓它開啟。"
+                            ? "沒有寫入 " + client.Name + "。"
                             : MacSupport.LastResignError));
                 }
                 Log(repair ? "修復完成。" : "安裝完成。");

@@ -35,10 +35,14 @@ namespace EndcordInstaller
 
         public static string PatcherJsForAsar()
         {
-            return "const {join}=require(\"path\");"
+            // A bare require kills Discord when patcher.js is missing or throws.
+            // Fall back to the original package so the app still opens.
+            return "const {join}=require(\"path\");const fs=require(\"fs\");"
                 + "const home=process.env.HOME||\"\";"
                 + "const appData=process.env.APPDATA||(process.platform===\"darwin\"?join(home,\"Library\",\"Application Support\"):(process.env.XDG_CONFIG_HOME||join(home,\".config\")));"
-                + "require(join(appData,\"Endcord\",\"dist\",\"patcher.js\"));";
+                + "const patcher=join(appData,\"Endcord\",\"dist\",\"patcher.js\");"
+                + "function original(){const asar=join(__dirname,\"..\",\"_app.asar\");const pkg=require(join(asar,\"package.json\"));require(join(asar,pkg.main||\"index.js\"));}"
+                + "try{if(!fs.existsSync(patcher))throw new Error(\"missing\");require(patcher);}catch(e){console.error(\"[Endcord]\",e);original();}";
         }
 
         // Windows Discord keeps a loose discord_desktop_core module. Requiring
@@ -195,28 +199,73 @@ namespace EndcordInstaller
 
             if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
             else if (File.Exists(tmp)) File.Delete(tmp);
-            UpdateMacAsarIntegrity(resourcesDir);
+            if (!RestorePlistBackup(resourcesDir))
+                UpdateMacAsarIntegrity(resourcesDir);
         }
 
         public static string LastResignError;
+
+        public static bool CanKeepRuntime(string appBundle)
+        {
+            if (!IsMac() || string.IsNullOrEmpty(appBundle)) return true;
+            string entitlements = RunCapture("/usr/bin/codesign", "-d --entitlements - \"" + appBundle + "\"");
+            return entitlements.IndexOf("allow-jit", StringComparison.Ordinal) >= 0
+                || entitlements.IndexOf("allow-unsigned-executable-memory", StringComparison.Ordinal) >= 0
+                || entitlements.IndexOf("disable-library-validation", StringComparison.Ordinal) >= 0;
+        }
+
+        // Patch only when we can still put a launchable Discord back.
+        // A failed sign rolls the asar and Info.plist back to the bytes we found.
+        public static bool ApplyMacPatch(string resourcesDir, string appBundle)
+        {
+            LastResignError = null;
+            if (!CanKeepRuntime(appBundle))
+            {
+                LastResignError = "Endcord 沒有改這個 Discord。它的執行權限已經不在，再改檔案會讓它開不起來。請刪掉 Discord.app（不要覆蓋），到官網重裝，先確認能打開，先不要按修復。";
+                return false;
+            }
+
+            Patch(resourcesDir);
+            if (Resign(appBundle)) return true;
+
+            Rollback(resourcesDir);
+            if (Resign(appBundle))
+                LastResignError = "寫入沒有完成，已把 Discord 還原成改動前的檔案。";
+            else
+                LastResignError = "寫入沒有完成。請刪掉 Discord.app 後到官網重裝，先確認能打開，先不要按修復。";
+            return false;
+        }
+
+        public static void Rollback(string resourcesDir)
+        {
+            if (string.IsNullOrEmpty(resourcesDir)) return;
+            string appAsar = Path.Combine(resourcesDir, "app.asar");
+            string backup = Path.Combine(resourcesDir, "_app.asar");
+            try
+            {
+                if (File.Exists(backup))
+                {
+                    PrepareWritable(appAsar);
+                    if (File.Exists(appAsar)) File.Delete(appAsar);
+                    PrepareWritable(backup);
+                    File.Move(backup, appAsar);
+                }
+            }
+            catch { }
+            RestorePlistBackup(resourcesDir);
+        }
 
         public static bool Resign(string appBundle)
         {
             LastResignError = null;
             if (!IsMac() || string.IsNullOrEmpty(appBundle)) return true;
-            Run("/usr/bin/xattr", "-cr \"" + appBundle + "\"");
-
-            string entitlements = RunCapture("/usr/bin/codesign", "-d --entitlements - \"" + appBundle + "\"");
-            bool hasRuntimeEntitlement = entitlements.IndexOf("allow-jit", StringComparison.Ordinal) >= 0
-                || entitlements.IndexOf("allow-unsigned-executable-memory", StringComparison.Ordinal) >= 0
-                || entitlements.IndexOf("disable-library-validation", StringComparison.Ordinal) >= 0;
-            if (!hasRuntimeEntitlement)
+            if (!CanKeepRuntime(appBundle))
             {
-                LastResignError = "Discord 的簽章已經壞了。請先到官網重新安裝 Discord，完全關掉後再按修復。";
+                LastResignError = "Endcord 沒有重新簽名。這個 Discord 的執行權限已經不在，簽下去會讓它開不起來。";
                 return false;
             }
 
-            DisableAsarIntegrityFuse(appBundle);
+            Run("/usr/bin/xattr", "-cr \"" + appBundle + "\"");
             return Run("/usr/bin/codesign", "--force --sign - --preserve-metadata=entitlements,requirements,flags,runtime --deep \"" + appBundle + "\"") == 0;
         }
 
@@ -370,6 +419,7 @@ namespace EndcordInstaller
 
             foreach (string plistPath in InfoPlists(resourcesDir))
             {
+                BackupPlistOnce(plistPath);
                 Run("/usr/bin/plutil", "-convert xml1 \"" + plistPath + "\"");
                 string text;
                 try { text = File.ReadAllText(plistPath); }
@@ -385,22 +435,41 @@ namespace EndcordInstaller
             }
         }
 
+        static string PlistBackupPath(string plistPath)
+        {
+            return plistPath + ".endcord-bak";
+        }
+
+        static void BackupPlistOnce(string plistPath)
+        {
+            string bak = PlistBackupPath(plistPath);
+            if (File.Exists(bak) || !File.Exists(plistPath)) return;
+            File.Copy(plistPath, bak, false);
+        }
+
+        static bool RestorePlistBackup(string resourcesDir)
+        {
+            bool restored = false;
+            foreach (string plistPath in InfoPlists(resourcesDir))
+            {
+                string bak = PlistBackupPath(plistPath);
+                if (!File.Exists(bak)) continue;
+                PrepareWritable(plistPath);
+                File.Copy(bak, plistPath, true);
+                File.Delete(bak);
+                restored = true;
+            }
+            return restored;
+        }
+
+        // Only the main Contents/Info.plist. Rewriting helper plists
+        // invalidates each helper and makes macOS refuse to open Discord.
         static IEnumerable<string> InfoPlists(string resourcesDir)
         {
             var contents = Directory.GetParent(resourcesDir);
             if (contents == null) yield break;
-            var app = contents.Parent;
             string main = Path.Combine(contents.FullName, "Info.plist");
             if (File.Exists(main)) yield return main;
-            if (app == null || !Directory.Exists(app.FullName)) yield break;
-            string[] files;
-            try { files = Directory.GetFiles(app.FullName, "Info.plist", SearchOption.AllDirectories); }
-            catch { yield break; }
-            foreach (string file in files)
-            {
-                if (!string.Equals(file, main, StringComparison.OrdinalIgnoreCase))
-                    yield return file;
-            }
         }
 
         public static string HeaderSha256(string asarPath)

@@ -907,11 +907,12 @@ namespace EndcordInstaller
 
                     if (c.IsMacBundle)
                     {
-                        MacSupport.Patch(c.ResourcesPath);
-                        if (MacSupport.Resign(c.RootPath))
+                        if (MacSupport.ApplyMacPatch(c.ResourcesPath, c.RootPath))
                             SafeLog("已安裝到 " + c.Name + "（" + c.Version + "）", C.Green);
                         else
-                            SafeLog("已寫入 " + c.Name + "，但 codesign 失敗，macOS 可能不讓它開啟。", C.Amber);
+                            SafeLog(string.IsNullOrEmpty(MacSupport.LastResignError)
+                                ? "沒有寫入 " + c.Name + "。"
+                                : MacSupport.LastResignError, C.Amber);
                         SetProg(48 + 52 * (i + 1) / targets.Count);
                         continue;
                     }
