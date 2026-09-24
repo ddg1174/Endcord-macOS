@@ -18,5 +18,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\MacSupport.cs" Link="MacSupport.cs" />
+    <EmbeddedResource Include="..\dist\version.json" Link="version.json" />
   </ItemGroup>
 </Project>

@@ -1,8 +1,11 @@
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.Net.Http;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -735,34 +738,201 @@ namespace EndcordInstaller
             catch { return null; }
         }
 
+        public static string ReadOwnInstallerVersion()
+        {
+            try
+            {
+                var asm = Assembly.GetExecutingAssembly();
+                foreach (var name in asm.GetManifestResourceNames())
+                {
+                    if (!name.EndsWith("version.json", StringComparison.OrdinalIgnoreCase)) continue;
+                    using (var stream = asm.GetManifestResourceStream(name))
+                    using (var reader = new StreamReader(stream))
+                    {
+                        string version = ReadVersionText(reader.ReadToEnd());
+                        if (!string.IsNullOrEmpty(version)) return version;
+                    }
+                }
+            }
+            catch { }
+
+            try
+            {
+                string exe = Process.GetCurrentProcess().MainModule.FileName;
+                var dir = new DirectoryInfo(Path.GetDirectoryName(exe));
+                while (dir != null)
+                {
+                    if (dir.Name.EndsWith(".app", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string plist = Path.Combine(dir.FullName, "Contents", "Info.plist");
+                        if (!File.Exists(plist)) break;
+                        var match = Regex.Match(File.ReadAllText(plist), "<key>CFBundleShortVersionString</key>\\s*<string>([^<]+)</string>");
+                        if (match.Success) return match.Groups[1].Value;
+                        break;
+                    }
+                    dir = dir.Parent;
+                }
+            }
+            catch { }
+            return null;
+        }
+
         public static void CheckForUpdate(Action<string> log)
         {
-            string local = ReadInstalledVersion();
+            string local = ReadOwnInstallerVersion();
             string remote = FetchLatestVersion();
             if (string.IsNullOrEmpty(remote))
             {
                 if (log != null) log("無法檢查更新。請確認可以連上 GitHub。");
                 return;
             }
-            if (local == remote)
+            if (!string.IsNullOrEmpty(local) && local == remote)
             {
-                if (log != null) log("已是最新版本（" + remote + "）。");
+                if (log != null) log("安裝程式已是最新版本（" + remote + "）。");
                 return;
             }
             if (log != null)
             {
                 log(string.IsNullOrEmpty(local)
-                    ? "GitHub 最新版是 " + remote + "，正在下載..."
-                    : "發現新版本 " + remote + "（目前是 " + local + "），正在下載...");
+                    ? "GitHub 最新版是 " + remote + "，正在下載安裝程式..."
+                    : "發現新版本 " + remote + "（這個安裝程式是 " + local + "），正在下載安裝程式...");
             }
-            if (TryUpdateDistFromGitHub(GetDistPath(), null))
+            string error = DownloadInstallerAndRelaunch();
+            if (error == null)
             {
-                if (log != null) log("已更新到 " + remote + "。請重新開啟 Discord。");
+                if (log != null) log("正在關閉這個安裝程式，並開啟新版本。");
+                Environment.Exit(0);
+                return;
             }
-            else if (log != null)
+            if (log != null) log(error);
+        }
+
+        static string DownloadInstallerAndRelaunch()
+        {
+            try
             {
-                log("下載失敗。");
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromMinutes(5);
+                    http.DefaultRequestHeaders.UserAgent.ParseAdd("EndcordInstaller");
+                    string meta = HttpGet(http, "https://api.github.com/repos/" + GitHubRepo + "/commits/main");
+                    var shaMatch = Regex.Match(meta ?? "", "\"sha\"\\s*:\\s*\"([0-9a-f]{40})\"");
+                    if (!shaMatch.Success) return "下載失敗。";
+                    string sha = shaMatch.Groups[1].Value;
+                    if (IsMac()) return DownloadMacAppAndRelaunch(http, sha);
+                    return DownloadWindowsExeAndRelaunch(http, sha);
+                }
             }
+            catch
+            {
+                return "下載失敗。";
+            }
+        }
+
+        static string DownloadWindowsExeAndRelaunch(HttpClient http, string sha)
+        {
+            string current = Process.GetCurrentProcess().MainModule.FileName;
+            if (string.IsNullOrEmpty(current) || !current.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                return "找不到正在執行的 EndcordInstaller.exe。";
+            byte[] bytes = HttpGetBytes(http, "https://raw.githubusercontent.com/" + GitHubRepo + "/" + sha + "/EndcordInstaller.exe");
+            if (bytes == null || bytes.Length < 1000000 || bytes[0] != (byte)'M' || bytes[1] != (byte)'Z')
+                return "下載到的安裝程式不完整。";
+            string downloaded = current + ".new";
+            File.WriteAllBytes(downloaded, bytes);
+            ScheduleWindowsRelaunch(current, downloaded);
+            return null;
+        }
+
+        static void ScheduleWindowsRelaunch(string currentExe, string downloadedExe)
+        {
+            int pid = Process.GetCurrentProcess().Id;
+            string scriptPath = Path.Combine(Path.GetTempPath(), "endcord-installer-update.ps1");
+            string script = "$target = " + pid + "\r\n"
+                + "Wait-Process -Id $target -ErrorAction SilentlyContinue\r\n"
+                + "Start-Sleep -Milliseconds 600\r\n"
+                + "Copy-Item -LiteralPath " + PsQuote(downloadedExe) + " -Destination " + PsQuote(currentExe) + " -Force\r\n"
+                + "Start-Process -FilePath " + PsQuote(currentExe) + "\r\n"
+                + "Remove-Item -LiteralPath " + PsQuote(downloadedExe) + " -Force -ErrorAction SilentlyContinue\r\n";
+            File.WriteAllText(scriptPath, script, new UTF8Encoding(false));
+            var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + scriptPath + "\"");
+            psi.UseShellExecute = true;
+            Process.Start(psi);
+        }
+
+        static string PsQuote(string value)
+        {
+            return "'" + (value ?? "").Replace("'", "''") + "'";
+        }
+
+        static string DownloadMacAppAndRelaunch(HttpClient http, string sha)
+        {
+            string app = CurrentMacAppBundle();
+            if (string.IsNullOrEmpty(app))
+                return "這個安裝程式不在 .app 裡，無法自己換掉。請到 GitHub 重新下載。";
+            string arch = RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "arm64" : "x64";
+            byte[] bytes = HttpGetBytes(http, "https://raw.githubusercontent.com/" + GitHubRepo + "/" + sha + "/publish/EndcordInstaller-" + arch + ".zip");
+            if (bytes == null || bytes.Length < 1000000 || bytes[0] != (byte)'P' || bytes[1] != (byte)'K')
+                return "下載到的 Mac 安裝程式不完整。";
+            string tempRoot = Path.Combine(Path.GetTempPath(), "endcord-installer-" + arch);
+            if (Directory.Exists(tempRoot)) Directory.Delete(tempRoot, true);
+            Directory.CreateDirectory(tempRoot);
+            string zipPath = Path.Combine(tempRoot, "installer.zip");
+            File.WriteAllBytes(zipPath, bytes);
+            ZipFile.ExtractToDirectory(zipPath, tempRoot);
+            string newApp = null;
+            foreach (string dir in Directory.GetDirectories(tempRoot, "*.app", SearchOption.AllDirectories))
+            {
+                newApp = dir;
+                break;
+            }
+            if (string.IsNullOrEmpty(newApp)) return "下載的壓縮檔裡沒有安裝程式。";
+            ScheduleMacRelaunch(app, newApp);
+            return null;
+        }
+
+        static string CurrentMacAppBundle()
+        {
+            try
+            {
+                string exe = Process.GetCurrentProcess().MainModule.FileName;
+                var dir = new DirectoryInfo(Path.GetDirectoryName(exe));
+                while (dir != null)
+                {
+                    if (dir.Name.EndsWith(".app", StringComparison.OrdinalIgnoreCase))
+                        return dir.FullName;
+                    dir = dir.Parent;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        static void ScheduleMacRelaunch(string appPath, string newAppPath)
+        {
+            int pid = Process.GetCurrentProcess().Id;
+            string scriptPath = "/tmp/endcord-installer-update.sh";
+            string script = "#!/bin/bash\n"
+                + "while kill -0 " + pid + " >/dev/null 2>&1; do sleep 0.2; done\n"
+                + "sleep 0.4\n"
+                + "rm -rf " + ShQuote(appPath) + "\n"
+                + "ditto " + ShQuote(newAppPath) + " " + ShQuote(appPath) + "\n"
+                + "chmod -R u+x " + ShQuote(Path.Combine(appPath, "Contents", "MacOS")) + "\n"
+                + "open " + ShQuote(appPath) + "\n";
+            File.WriteAllText(scriptPath, script, new UTF8Encoding(false));
+            Run("/bin/chmod", "+x \"" + scriptPath + "\"");
+            Process.Start(new ProcessStartInfo("/bin/bash", "\"" + scriptPath + "\""));
+        }
+
+        static string ShQuote(string value)
+        {
+            return "'" + (value ?? "").Replace("'", "'\\''") + "'";
+        }
+
+        static byte[] HttpGetBytes(HttpClient http, string url)
+        {
+            var response = http.GetAsync(url).ConfigureAwait(false).GetAwaiter().GetResult();
+            if (!response.IsSuccessStatusCode) return null;
+            return response.Content.ReadAsByteArrayAsync().ConfigureAwait(false).GetAwaiter().GetResult();
         }
 
         static string ReadVersionFile(string path)
