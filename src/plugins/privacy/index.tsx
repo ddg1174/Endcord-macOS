@@ -15,11 +15,13 @@ import { RestAPI } from "@webpack/common";
 
 const logger = new Logger("Privacy", "#a6d189");
 
-const TRACKING_PARAM = /^(?:utm_.+|fbclid|gclid|mc_eid|igshid)$/i;
+const TRACKING_PARAM = /^(?:utm_.+|fbclid|gclid|gbraid|wbraid|dclid|msclkid|twclid|ttclid|igshid|igsh|mc_eid|mc_cid|_hsenc|_hsmi|mkt_tok|yclid|vero_id|vero_conv|oly_anon_id|oly_enc_id|fb_action_ids|fb_action_types|fb_source|sc_cid|wickedid|rb_clickid|epik)$/i;
+const TELEMETRY_URL = /\/science(?:[/?#]|$)|\/metrics(?:[/?#]|$)|ingest\.sentry\.io|error-reporting-proxy|\/error-reporting(?:[/?#]|$)|\/users\/@me\/affinities(?:[/?#]|$)/i;
 const URL_IN_TEXT = /https?:\/\/[^\s<]+[^<.,:;"'>)|\]\s]/g;
 const ACK_POST = /([\w.]+)\.post\((\{(?:[^{}]|\{[^{}]*\})*\})\)/g;
 
 const StatusSettings = getUserSettingLazy<string>("status", "status")!;
+const ShowCurrentGame = getUserSettingLazy<boolean>("status", "showCurrentGame")!;
 
 let ackPatchDetected = false;
 let ackFallbackInstalled = false;
@@ -53,7 +55,19 @@ const settings = definePluginSettings({
     },
     stripLinks: {
         type: OptionType.BOOLEAN,
-        description: "送出與編輯訊息時去掉 utm、fbclid、gclid、mc_eid、igshid。",
+        description: "送出與編輯訊息時去掉廣告與社群平台的追蹤參數。",
+        default: true,
+        onChange: applyPrivacy
+    },
+    blockTelemetry: {
+        type: OptionType.BOOLEAN,
+        description: "擋下 Discord 的分析、指標、當機回報，以及好友推薦用的 affinities。",
+        default: true,
+        onChange: applyPrivacy
+    },
+    hideActivity: {
+        type: OptionType.BOOLEAN,
+        description: "不分享正在玩的遊戲、Spotify 和自訂動態。",
         default: true,
         onChange: applyPrivacy
     },
@@ -80,6 +94,18 @@ const settings = definePluginSettings({
         description: "internal",
         default: "",
         hidden: true
+    },
+    activitySnapshotTaken: {
+        type: OptionType.BOOLEAN,
+        description: "internal",
+        default: false,
+        hidden: true
+    },
+    activityWasShown: {
+        type: OptionType.BOOLEAN,
+        description: "internal",
+        default: true,
+        hidden: true
     }
 });
 
@@ -96,6 +122,22 @@ function isAckUrl(url: unknown) {
 
 function shouldBlockAck(url: unknown) {
     return privacyOn() && !!settings.store.hideReadReceipts && isAckUrl(url);
+}
+
+function requestUrl(input: unknown) {
+    if (typeof input === "string") return input;
+    if (input instanceof URL) return input.href;
+    if (input && typeof input === "object" && "url" in input && typeof (input as { url?: unknown; }).url === "string")
+        return (input as { url: string; }).url;
+    return "";
+}
+
+function shouldBlockTelemetry(url: unknown) {
+    return privacyOn() && !!settings.store.blockTelemetry && typeof url === "string" && TELEMETRY_URL.test(url);
+}
+
+function shouldDropRequest(url: unknown) {
+    return shouldBlockAck(url) || shouldBlockTelemetry(url);
 }
 
 function blockedAckResponse() {
@@ -115,23 +157,90 @@ function detectAckPatch() {
     }
 }
 
+const restOriginals = new Map<string, (...args: any[]) => any>();
+let fetchInstalled = false;
+let originalFetch: typeof fetch | null = null;
+let xhrInstalled = false;
+let originalXhrOpen: typeof XMLHttpRequest.prototype.open | null = null;
+let originalXhrSend: typeof XMLHttpRequest.prototype.send | null = null;
+
 function installAckFallback() {
     if (ackFallbackInstalled) return;
     const api = RestAPI as any;
-    if (typeof api?.post !== "function") return;
-    originalPost = api.post.bind(api);
-    api.post = (opts: any, ...rest: any[]) => {
-        if (shouldBlockAck(opts?.url)) return blockedAckResponse();
-        return originalPost!(opts, ...rest);
-    };
-    ackFallbackInstalled = true;
+    for (const method of ["get", "post", "put", "patch", "del", "delete", "request"]) {
+        if (typeof api?.[method] !== "function" || restOriginals.has(method)) continue;
+        const original = api[method].bind(api);
+        restOriginals.set(method, original);
+        api[method] = (opts: any, ...rest: any[]) => {
+            if (shouldDropRequest(opts?.url)) return blockedAckResponse();
+            return original(opts, ...rest);
+        };
+    }
+    if (typeof api?.post === "function") {
+        originalPost = restOriginals.get("post") ?? null;
+        ackFallbackInstalled = true;
+    }
+    installFetchHook();
+    installXhrHook();
 }
 
 function restoreAckFallback() {
-    if (!ackFallbackInstalled || !originalPost) return;
-    (RestAPI as any).post = originalPost;
+    const api = RestAPI as any;
+    for (const [method, original] of restOriginals)
+        api[method] = original;
+    restOriginals.clear();
     originalPost = null;
     ackFallbackInstalled = false;
+    restoreFetchHook();
+    restoreXhrHook();
+}
+
+function installFetchHook() {
+    if (fetchInstalled || typeof window.fetch !== "function") return;
+    originalFetch = window.fetch.bind(window);
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+        if (shouldDropRequest(requestUrl(input)))
+            return Promise.resolve(new Response(null, { status: 204 }));
+        return originalFetch!(input, init);
+    }) as typeof fetch;
+    fetchInstalled = true;
+}
+
+function restoreFetchHook() {
+    if (!fetchInstalled || !originalFetch) return;
+    window.fetch = originalFetch;
+    originalFetch = null;
+    fetchInstalled = false;
+}
+
+function installXhrHook() {
+    if (xhrInstalled) return;
+    originalXhrOpen = XMLHttpRequest.prototype.open;
+    originalXhrSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (this: XMLHttpRequest & { __endcordUrl?: string; }, method: string, url: string | URL, ...rest: any[]) {
+        this.__endcordUrl = String(url);
+        return (originalXhrOpen as any).call(this, method, url, ...rest);
+    };
+    XMLHttpRequest.prototype.send = function (this: XMLHttpRequest & { __endcordUrl?: string; }, body?: Document | XMLHttpRequestBodyInit | null) {
+        if (shouldDropRequest(this.__endcordUrl)) {
+            setTimeout(() => {
+                this.dispatchEvent(new Event("load"));
+                this.dispatchEvent(new Event("loadend"));
+            }, 0);
+            return;
+        }
+        return originalXhrSend!.call(this, body);
+    };
+    xhrInstalled = true;
+}
+
+function restoreXhrHook() {
+    if (!xhrInstalled) return;
+    if (originalXhrOpen) XMLHttpRequest.prototype.open = originalXhrOpen;
+    if (originalXhrSend) XMLHttpRequest.prototype.send = originalXhrSend;
+    originalXhrOpen = null;
+    originalXhrSend = null;
+    xhrInstalled = false;
 }
 
 export function getReadReceiptStatus(): "patched" | "fallback" | "missing" {
@@ -143,6 +252,10 @@ export function getReadReceiptStatus(): "patched" | "fallback" | "missing" {
 
 export function isPresenceReady() {
     return presenceReady;
+}
+
+export function isTelemetryHooked() {
+    return fetchInstalled || restOriginals.size > 0 || xhrInstalled;
 }
 
 function applyTyping(hide: boolean) {
@@ -229,10 +342,43 @@ export function captureTypingSnapshot() {
     privacy.typingWasActive = typing?.isEnabled !== false;
 }
 
+function captureActivitySnapshot() {
+    if (settings.store.activitySnapshotTaken) return;
+    try {
+        const current = ShowCurrentGame.getSetting();
+        if (typeof current !== "boolean") return;
+        settings.store.activityWasShown = current;
+        settings.store.activitySnapshotTaken = true;
+    } catch (e) {
+        logger.error("Failed to read game activity setting", e);
+    }
+}
+
+function applyActivity(hide: boolean) {
+    try {
+        const current = ShowCurrentGame.getSetting();
+        if (typeof current !== "boolean") return;
+        if (!settings.store.activitySnapshotTaken) {
+            settings.store.activityWasShown = current;
+            settings.store.activitySnapshotTaken = true;
+        }
+        if (hide) {
+            if (current !== false)
+                void ShowCurrentGame.updateSetting(false);
+            return;
+        }
+        if (settings.store.activityWasShown && current === false)
+            void ShowCurrentGame.updateSetting(true);
+    } catch (e) {
+        logger.error("Failed to update game activity setting", e);
+    }
+}
+
 function applyPrivacy() {
     const on = privacyOn();
     applyTyping(on && !!settings.store.hideTyping);
     applyPresence(on && !!settings.store.hidePresence);
+    applyActivity(on && !!settings.store.hideActivity);
 }
 
 export function refreshPrivacyRuntime() {
@@ -245,7 +391,7 @@ export { settings };
 
 export default definePlugin({
     name: "Privacy",
-    description: "讓 Discord 少把你的正在輸入、已讀、上線狀態和連結追蹤送出去",
+    description: "擋下正在輸入、已讀、上線狀態、遊戲動態，以及 Discord 的分析與連結追蹤",
     authors: [Devs.Endcord],
     tags: ["Privacy"],
     enabledByDefault: true,
@@ -279,6 +425,7 @@ export default definePlugin({
     },
 
     start() {
+        captureActivitySnapshot();
         refreshPrivacyRuntime();
     },
 
@@ -286,5 +433,6 @@ export default definePlugin({
         restoreAckFallback();
         applyTyping(false);
         applyPresence(false);
+        applyActivity(false);
     }
 });
