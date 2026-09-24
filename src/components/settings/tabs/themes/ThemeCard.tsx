@@ -36,17 +36,17 @@ export function ThemeCard({ theme, enabled, onChange, onDelete }: ThemeCardProps
             }
             footer={
                 <Flex flexDirection="row" gap="0.2em">
-                    {!!theme.website && <Link href={theme.website}>Website</Link>}
+                    {!!theme.website && <Link href={theme.website}>網站</Link>}
                     {!!(theme.website && theme.invite) && " • "}
                     {!!theme.invite && (
                         <Link
                             href={`https://discord.gg/${theme.invite}`}
                             onClick={async e => {
                                 e.preventDefault();
-                                theme.invite != null && openInviteModal(theme.invite).catch(() => showToast("Invalid or expired invite"));
+                                theme.invite != null && openInviteModal(theme.invite).catch(() => showToast("邀請無效或已過期"));
                             }}
                         >
-                            Discord Server
+                            Discord 伺服器
                         </Link>
                     )}
                 </Flex>

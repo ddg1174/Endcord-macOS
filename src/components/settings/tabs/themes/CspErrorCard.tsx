@@ -41,10 +41,10 @@ export function CspErrorCard() {
         openModal(props => (
             <ConfirmModal
                 {...props}
-                title="Restart Required"
-                subtitle="A restart is required to apply this change"
-                confirmText="Restart now"
-                cancelText="Later!"
+                title="需要重新啟動"
+                subtitle="要重新啟動才會套用這項變更"
+                confirmText="現在重新啟動"
+                cancelText="稍後"
                 variant="primary"
                 onConfirm={relaunch}
             />
@@ -55,14 +55,14 @@ export function CspErrorCard() {
 
     return (
         <ErrorCard>
-            <Forms.FormTitle tag="h5">Blocked Resources</Forms.FormTitle>
-            <Forms.FormText>Some images, styles, or fonts were blocked because they come from disallowed domains.</Forms.FormText>
-            <Forms.FormText>It is highly recommended to move them to GitHub or Imgur. But you may also allow domains if you fully trust them.</Forms.FormText>
+            <Forms.FormTitle tag="h5">被擋住的資源</Forms.FormTitle>
+            <Forms.FormText>有些圖片、樣式或字型來自不允許的網域，所以被擋住了。</Forms.FormText>
+            <Forms.FormText>建議改放到 GitHub 或 Imgur。如果你完全信任那個網域，也可以允許它。</Forms.FormText>
             <Forms.FormText>
-                After allowing a domain, you have to fully close (from tray / task manager) and restart {IS_DISCORD_DESKTOP ? "Discord" : "Vesktop"} to apply the change.
+                允許之後，要從工作列或工作管理員完全關掉 {IS_DISCORD_DESKTOP ? "Discord" : "Vesktop"} 再打開，才會生效。
             </Forms.FormText>
 
-            <Forms.FormTitle tag="h5" className={classes(Margins.top16, Margins.bottom8)}>Blocked URLs</Forms.FormTitle>
+            <Forms.FormTitle tag="h5" className={classes(Margins.top16, Margins.bottom8)}>被擋住的網址</Forms.FormTitle>
             <div className="vc-settings-csp-list">
                 {errors.map((url, i) => (
                     <div key={url}>
@@ -70,7 +70,7 @@ export function CspErrorCard() {
                         <div className="vc-settings-csp-row">
                             <Link href={url}>{url}</Link>
                             <Button color={Button.Colors.PRIMARY} onClick={() => allowUrl(url)} disabled={isImgurHtmlDomain(url)}>
-                                Allow
+                                允許
                             </Button>
                         </div>
                     </div>
@@ -81,9 +81,9 @@ export function CspErrorCard() {
                 <>
                     <Divider className={classes(Margins.top8, Margins.bottom16)} />
                     <Forms.FormText>
-                        Imgur links should be direct links in the form of <code>https://i.imgur.com/...</code>
+                        Imgur 請用 <code>https://i.imgur.com/...</code> 這種直接網址。
                     </Forms.FormText>
-                    <Forms.FormText>To obtain a direct link, right-click the image and select "Copy image address".</Forms.FormText>
+                    <Forms.FormText>在圖片上按右鍵，選「複製圖片網址」。</Forms.FormText>
                 </>
             )}
         </ErrorCard>

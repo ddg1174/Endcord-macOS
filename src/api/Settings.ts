@@ -33,6 +33,17 @@ export interface Settings {
     enabledThemes: string[];
     enableReactDevtools: boolean;
     themeLinks: string[];
+    customBackground: {
+        enabled: boolean;
+        fileName: string;
+        kind: "" | "image" | "video";
+        opacity: number;
+        blur: number;
+        dim: number;
+        panel: number;
+        fit: "cover" | "contain" | "fill";
+        loop: boolean;
+    };
     frameless: boolean;
     transparent: boolean;
     winCtrlQ: boolean;
@@ -85,6 +96,17 @@ const DefaultSettings: Settings = {
     autoUpdateNotification: true,
     useQuickCss: true,
     themeLinks: [],
+    customBackground: {
+        enabled: false,
+        fileName: "",
+        kind: "",
+        opacity: 100,
+        blur: 0,
+        dim: 30,
+        panel: 72,
+        fit: "cover",
+        loop: true
+    },
     eagerPatches: false, // Eagerly patching no longer works due to module factories with the same id being able to have different sources now.
     enabledThemes: [],
     enableReactDevtools: false,

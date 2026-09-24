@@ -5,6 +5,7 @@
  */
 
 import { Settings, SettingsStore } from "@api/Settings";
+import { initCustomBackground } from "@api/customBackground";
 import { ThemeStore } from "@endcord/discord-types";
 import { createAndAppendStyle } from "@utils/css";
 import { PopoutWindowStore } from "@webpack/common";
@@ -93,6 +94,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (IS_USERSCRIPT) return;
 
     initThemes();
+    initCustomBackground();
 
     toggle(Settings.useQuickCss);
     SettingsStore.addChangeListener("useQuickCss", toggle);

@@ -86,24 +86,24 @@ export function LocalThemesTab() {
     return (
         <Flex flexDirection="column" gap="1em">
             <Card>
-                <Forms.FormTitle tag="h5">Find Themes:</Forms.FormTitle>
+                <Forms.FormTitle tag="h5">找主題</Forms.FormTitle>
                 <div style={{ marginBottom: ".5em", display: "flex", flexDirection: "column" }}>
                     <Link style={{ marginRight: ".5em" }} href="https://betterdiscord.app/themes">
-                        BetterDiscord Themes
+                        BetterDiscord 主題
                     </Link>
                     <Link href="https://github.com/search?q=discord+theme">GitHub</Link>
                 </div>
-                <Forms.FormText>If using the BD site, click on "Download" and place the downloaded .theme.css file into your themes folder.</Forms.FormText>
+                <Forms.FormText>如果用 BetterDiscord 網站，按 Download，再把下載的 .theme.css 放到主題資料夾。</Forms.FormText>
             </Card>
 
             <Card>
-                <Forms.FormTitle tag="h5">External Resources</Forms.FormTitle>
-                <Forms.FormText>For security reasons, loading resources (styles, fonts, images, ...) from most sites is blocked.</Forms.FormText>
-                <Forms.FormText>Make sure all your assets are hosted on GitHub, GitLab, Codeberg, Imgur, Discord or Google Fonts.</Forms.FormText>
+                <Forms.FormTitle tag="h5">外部資源</Forms.FormTitle>
+                <Forms.FormText>為了安全，大多數網站的樣式、字型、圖片不能直接載入。</Forms.FormText>
+                <Forms.FormText>請把素材放在 GitHub、GitLab、Codeberg、Imgur、Discord 或 Google Fonts。</Forms.FormText>
             </Card>
 
             <section>
-                <Forms.FormTitle tag="h5">Local Themes</Forms.FormTitle>
+                <Forms.FormTitle tag="h5">本機主題</Forms.FormTitle>
                 <QuickActionCard>
                     <>
                         {IS_WEB ?
@@ -111,7 +111,7 @@ export function LocalThemesTab() {
                                 <QuickAction
                                     text={
                                         <span style={{ position: "relative" }}>
-                                            Upload Theme
+                                            上傳主題
                                             <FileInput
                                                 ref={fileInputRef}
                                                 onChange={async e => {
@@ -127,25 +127,25 @@ export function LocalThemesTab() {
                                 />
                             ) : (
                                 <QuickAction
-                                    text="Open Themes Folder"
+                                    text="開啟主題資料夾"
                                     action={() => EndcordNative.themes.openFolder()}
                                     Icon={FolderIcon}
                                 />
                             )}
                         <QuickAction
-                            text="Load missing Themes"
+                            text="重新載入主題"
                             action={refreshLocalThemes}
                             Icon={RestartIcon}
                         />
                         <QuickAction
-                            text="Edit QuickCSS"
+                            text="編輯 QuickCSS"
                             action={() => EndcordNative.quickCss.openEditor()}
                             Icon={PaintbrushIcon}
                         />
 
                         {isPluginEnabled(ClientThemePlugin.name) && (
                             <QuickAction
-                                text="Edit ClientTheme"
+                                text="編輯客戶端主題"
                                 action={() => openPluginModal(ClientThemePlugin)}
                                 Icon={PencilIcon}
                             />

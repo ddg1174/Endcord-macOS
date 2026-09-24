@@ -13,18 +13,26 @@ import { IpcEvents } from "@shared/IpcEvents";
 import { BrowserWindow, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
 import monacoHtml from "file://monacoWin.html?minify&base64";
 import { FSWatcher, mkdirSync, readFileSync, watch, writeFileSync } from "fs";
-import { open, readdir, readFile } from "fs/promises";
+import { open, readdir, readFile, unlink, writeFile } from "fs/promises";
 import { release } from "os";
 import { join, normalize } from "path";
 
 import { registerCspIpcHandlers } from "./csp/manager";
 import { getThemeInfo, stripBOM, UserThemeHeader } from "./themes";
-import { ALLOWED_PROTOCOLS, QUICK_CSS_PATH, SETTINGS_DIR, THEMES_DIR } from "./utils/constants";
+import { ALLOWED_PROTOCOLS, BACKGROUNDS_DIR, QUICK_CSS_PATH, SETTINGS_DIR, THEMES_DIR } from "./utils/constants";
 import { makeLinksOpenExternally } from "./utils/externalLinks";
 
 const RENDERER_CSS_PATH = join(__dirname, IS_VESKTOP ? "endcordDesktopRenderer.css" : "renderer.css");
 
 mkdirSync(THEMES_DIR, { recursive: true });
+mkdirSync(BACKGROUNDS_DIR, { recursive: true });
+
+const BACKGROUND_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "mp4", "webm", "mov"]);
+
+async function clearBackgroundFiles() {
+    const files = await readdir(BACKGROUNDS_DIR).catch(() => [] as string[]);
+    await Promise.all(files.map(file => unlink(join(BACKGROUNDS_DIR, file)).catch(() => { })));
+}
 
 registerCspIpcHandlers();
 
@@ -98,6 +106,20 @@ ipcMain.handle(IpcEvents.GET_THEME_SYSTEM_VALUES, () => {
 });
 
 ipcMain.handle(IpcEvents.OPEN_THEMES_FOLDER, () => shell.openPath(THEMES_DIR));
+
+ipcMain.handle(IpcEvents.SAVE_CUSTOM_BACKGROUND, async (_, originalName: string, data: Uint8Array) => {
+    const ext = (originalName.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!BACKGROUND_EXTENSIONS.has(ext)) throw new Error("不支援的檔案");
+    if (!data || data.byteLength < 32 || data.byteLength > 80 * 1024 * 1024) throw new Error("檔案太大或是空的");
+
+    mkdirSync(BACKGROUNDS_DIR, { recursive: true });
+    await clearBackgroundFiles();
+    const fileName = "background." + ext;
+    await writeFile(join(BACKGROUNDS_DIR, fileName), Buffer.from(data));
+    return fileName;
+});
+
+ipcMain.handle(IpcEvents.CLEAR_CUSTOM_BACKGROUND, () => clearBackgroundFiles());
 ipcMain.handle(IpcEvents.OPEN_SETTINGS_FOLDER, () => shell.openPath(SETTINGS_DIR));
 
 ipcMain.handle(IpcEvents.INIT_FILE_WATCHERS, ({ sender }) => {

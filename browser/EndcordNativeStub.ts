@@ -51,6 +51,8 @@ window.EndcordNative = {
         getSystemValues: async () => ({}),
 
         openFolder: async () => Promise.reject("themes:openFolder is not supported on web"),
+        saveBackground: async () => Promise.reject("自訂背景請在桌面版使用"),
+        clearBackground: async () => { },
     },
 
     native: {

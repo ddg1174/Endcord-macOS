@@ -17,6 +17,7 @@ import { getStylusWebStoreUrl } from "@utils/web";
 import { Forms, React, TabBar, useState } from "@webpack/common";
 
 import { CspErrorCard } from "./CspErrorCard";
+import { CustomBackgroundCard } from "./CustomBackgroundCard";
 import { LocalThemesTab } from "./LocalThemesTab";
 import { OnlineThemesTab } from "./OnlineThemesTab";
 
@@ -41,13 +42,13 @@ function ThemesTab() {
                     className="vc-settings-tab-bar-item"
                     id={ThemeTab.LOCAL}
                 >
-                    Local Themes
+                    本機主題
                 </TabBar.Item>
                 <TabBar.Item
                     className="vc-settings-tab-bar-item"
                     id={ThemeTab.ONLINE}
                 >
-                    Online Themes
+                    線上主題
                 </TabBar.Item>
             </TabBar>
 
@@ -55,12 +56,13 @@ function ThemesTab() {
                 <CspErrorCard />
 
                 <Card variant="warning">
-                    <BaseText tag="h3" size="md" weight="medium" className={Margins.bottom8}>Theme Performance</BaseText>
+                    <BaseText tag="h3" size="md" weight="medium" className={Margins.bottom8}>主題效能</BaseText>
                     <Paragraph>
-                        Themes and custom CSS have the potential to cause major lag! If you experience performance issues, try
-                        disabling your themes and CSS to see if they're the cause. The most common cause of lag is the <code>:has()</code> operator.
+                        主題和自訂 CSS 可能造成明顯卡頓。如果 Discord 變慢，先關掉主題和 CSS 看看是不是它們造成的。最常見的原因是 <code>:has()</code>。
                     </Paragraph>
                 </Card>
+
+                <CustomBackgroundCard />
 
                 {currentTab === ThemeTab.LOCAL && <LocalThemesTab />}
                 {currentTab === ThemeTab.ONLINE && <OnlineThemesTab />}
@@ -73,10 +75,10 @@ function UserscriptThemesTab() {
     return (
         <SettingsTab>
             <Card variant="danger">
-                <Forms.FormTitle tag="h5">Themes are not supported on the Userscript!</Forms.FormTitle>
+                <Forms.FormTitle tag="h5">使用者腳本不支援主題</Forms.FormTitle>
 
                 <Forms.FormText>
-                    You can instead install themes with the <Link href={getStylusWebStoreUrl()}>Stylus extension</Link>!
+                    可以改用 <Link href={getStylusWebStoreUrl()}>Stylus 擴充功能</Link> 安裝主題。
                 </Forms.FormText>
             </Card>
         </SettingsTab>
@@ -84,5 +86,5 @@ function UserscriptThemesTab() {
 }
 
 export default IS_USERSCRIPT
-    ? wrapTab(UserscriptThemesTab, "Themes")
-    : wrapTab(ThemesTab, "Themes");
+    ? wrapTab(UserscriptThemesTab, "主題")
+    : wrapTab(ThemesTab, "主題");

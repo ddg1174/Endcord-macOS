@@ -11,7 +11,7 @@ import { pathToFileURL } from "url";
 import { initCsp } from "./csp";
 import { ensureSafePath } from "./ipcMain";
 import { RendererSettings } from "./settings";
-import { IS_VANILLA, THEMES_DIR } from "./utils/constants";
+import { BACKGROUNDS_DIR, IS_VANILLA, THEMES_DIR } from "./utils/constants";
 import { installExt } from "./utils/extensions";
 
 if (IS_VESKTOP || !IS_VANILLA) {
@@ -21,10 +21,11 @@ if (IS_VESKTOP || !IS_VANILLA) {
 
             if (url.endsWith("/")) url = url.slice(0, -1);
 
-            if (url.startsWith("/themes/")) {
-                const theme = url.slice("/themes/".length);
+            if (url.startsWith("/themes/") || url.startsWith("/backgrounds/")) {
+                const isBackground = url.startsWith("/backgrounds/");
+                const theme = url.slice(isBackground ? "/backgrounds/".length : "/themes/".length);
 
-                const safeUrl = ensureSafePath(THEMES_DIR, theme);
+                const safeUrl = ensureSafePath(isBackground ? BACKGROUNDS_DIR : THEMES_DIR, theme);
                 if (!safeUrl) {
                     return new Response(null, {
                         status: 404

@@ -22,6 +22,8 @@ export const enum IpcEvents {
 
     OPEN_EXTERNAL = "EndcordOpenExternal",
     OPEN_THEMES_FOLDER = "EndcordOpenThemesFolder",
+    SAVE_CUSTOM_BACKGROUND = "EndcordSaveCustomBackground",
+    CLEAR_CUSTOM_BACKGROUND = "EndcordClearCustomBackground",
     OPEN_SETTINGS_FOLDER = "EndcordOpenSettingsFolder",
 
     GET_UPDATES = "EndcordGetUpdates",

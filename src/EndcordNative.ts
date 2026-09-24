@@ -43,6 +43,8 @@ export default {
         getSystemValues: () => invoke<Record<string, string>>(IpcEvents.GET_THEME_SYSTEM_VALUES),
 
         openFolder: () => invoke<void>(IpcEvents.OPEN_THEMES_FOLDER),
+        saveBackground: (fileName: string, data: Uint8Array) => invoke<string>(IpcEvents.SAVE_CUSTOM_BACKGROUND, fileName, data),
+        clearBackground: () => invoke<void>(IpcEvents.CLEAR_CUSTOM_BACKGROUND),
     },
 
     updater: {

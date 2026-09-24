@@ -179,7 +179,8 @@ export default definePlugin({
             }),
             buildEntry({
                 key: "endcord_themes",
-                title: "Themes",
+                title: "主題",
+                panelTitle: "主題",
                 Component: ThemesTab,
                 Icon: PaintbrushIcon
             }),

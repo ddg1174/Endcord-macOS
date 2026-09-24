@@ -1,3 +1,12 @@
+.vc-bg-upload {
+    background: var(--button-secondary-background);
+    color: var(--text-normal);
+    border: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
 .vc-settings-theme-grid {
     display: grid;
     gap: 16px;
